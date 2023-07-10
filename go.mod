@@ -55,7 +55,6 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.13.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
-	github.com/lf-edge/eve/api/go v0.0.0-20230306060116-9673fb35833f // indirect
 	github.com/mattn/go-ieproxy v0.0.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.0.2 // indirect

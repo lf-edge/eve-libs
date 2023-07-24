@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lf-edge/eve/libs/zedUpload"
+	"github.com/lf-edge/eve-libs/zedUpload"
 )
 
 const (

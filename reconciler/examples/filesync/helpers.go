@@ -10,15 +10,15 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/lf-edge/eve/libs/depgraph"
+	"github.com/lf-edge/eve-libs/depgraph"
 )
 
 const (
-	gvRedirectHost = "127.0.0.1:8080"
-	gvRedirectURL = "http://" + gvRedirectHost
-	gvCurrentState = "/CurrentState"
-	gvIntendedState = "/IntendedState"
-	gvMergedState = "/MergedState"
+	gvRedirectHost   = "127.0.0.1:8080"
+	gvRedirectURL    = "http://" + gvRedirectHost
+	gvCurrentState   = "/CurrentState"
+	gvIntendedState  = "/IntendedState"
+	gvMergedState    = "/MergedState"
 	gvRedirectTarget = "http://dreampuf.github.io/GraphvizOnline"
 )
 
@@ -37,8 +37,8 @@ func (d *demo) redirect(dot string, exportErr error, target *url.URL,
 	target.Fragment = dot
 	// Do not let the client to cache.
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate") // HTTP 1.1.
-	w.Header().Set("Pragma", "no-cache") // HTTP 1.0.
-	w.Header().Set("Expires", "0") // Proxies.
+	w.Header().Set("Pragma", "no-cache")                                   // HTTP 1.0.
+	w.Header().Set("Expires", "0")                                         // Proxies.
 	http.Redirect(w, r, target.String(), 302)
 }
 
@@ -78,12 +78,12 @@ func (d *demo) redirectGraphvizRendering() {
 }
 
 func (d *demo) printReport(format string, args ...interface{}) {
-	fmt.Printf(colorGreen + format + "\n" + colorReset, args...)
+	fmt.Printf(colorGreen+format+"\n"+colorReset, args...)
 }
 
 func (d *demo) svgImageCircles(numOfCircles int) string {
 	image := "<svg height=\"300\" width=\"200\">\n"
-	for i:=0; i < numOfCircles; i++ {
+	for i := 0; i < numOfCircles; i++ {
 		image += fmt.Sprintf("<circle cx=\"50\" cy=\"%d\" r=\"20\" fill=\"red\"/>\n",
 			50+i*50)
 	}
@@ -93,7 +93,7 @@ func (d *demo) svgImageCircles(numOfCircles int) string {
 
 func (d *demo) svgImageSquares(numOfSquares int) string {
 	image := "<svg height=\"300\" width=\"200\">\n"
-	for i:=0; i < numOfSquares; i++ {
+	for i := 0; i < numOfSquares; i++ {
 		image += fmt.Sprintf("<rect width=\"50\" height=\"50\" x=\"50\" y=\"%d\" fill=\"blue\"/>\n",
 			50+i*50)
 	}

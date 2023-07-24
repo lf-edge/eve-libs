@@ -8,7 +8,7 @@ package reconciler
 import (
 	"fmt"
 
-	dg "github.com/lf-edge/eve/libs/depgraph"
+	dg "github.com/lf-edge/eve-libs/depgraph"
 )
 
 type stackElem struct {

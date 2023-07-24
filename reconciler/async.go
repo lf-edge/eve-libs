@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	dg "github.com/lf-edge/eve/libs/depgraph"
+	dg "github.com/lf-edge/eve-libs/depgraph"
 )
 
 const (

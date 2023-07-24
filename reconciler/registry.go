@@ -6,7 +6,7 @@ package reconciler
 import (
 	"fmt"
 
-	"github.com/lf-edge/eve/libs/depgraph"
+	"github.com/lf-edge/eve-libs/depgraph"
 )
 
 // DefaultRegistry implements ConfiguratorRegistry.

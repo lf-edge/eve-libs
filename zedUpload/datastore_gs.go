@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	zedGS "github.com/lf-edge/eve/libs/zedUpload/gsutil"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	zedGS "github.com/lf-edge/eve-libs/zedUpload/gsutil"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 // Action do the operation with Google Storage datastore

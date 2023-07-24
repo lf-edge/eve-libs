@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 	"github.com/sirupsen/logrus"
 )
 

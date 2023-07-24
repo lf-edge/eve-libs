@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/lf-edge/eve/libs/depgraph"
+	. "github.com/lf-edge/eve-libs/depgraph"
 	. "github.com/onsi/gomega"
 )
 
@@ -775,10 +775,10 @@ func TestDiffItems(test *testing.T) {
 		attrs:    mockItemAttrs{boolAttr: true}, // different
 	}
 	initArgs = InitArgs{
-		Name:  "RootGraph3",
+		Name: "RootGraph3",
 		Subgraphs: []InitArgs{
 			{
-				Name: "Graph3",
+				Name:  "Graph3",
 				Items: []Item{itemA, itemB},
 				Subgraphs: []InitArgs{
 					{
@@ -847,10 +847,10 @@ func TestDotExporter(test *testing.T) {
 		},
 	}
 	initArgs := InitArgs{
-		Name:  "Graph1",
+		Name: "Graph1",
 		ItemsWithState: []ItemWithState{
 			{
-				Item:  itemA,
+				Item: itemA,
 				State: mockItemState{
 					isCreated: true,
 					withErr:   errors.New("failed to modify"),
@@ -862,7 +862,7 @@ func TestDotExporter(test *testing.T) {
 				Name: "SubGraph1",
 				ItemsWithState: []ItemWithState{
 					{
-						Item:  itemC,
+						Item: itemC,
 						State: mockItemState{
 							isCreated:    true,
 							inTransition: true,

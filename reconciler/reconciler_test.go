@@ -11,8 +11,8 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	dg "github.com/lf-edge/eve/libs/depgraph"
-	rec "github.com/lf-edge/eve/libs/reconciler"
+	dg "github.com/lf-edge/eve-libs/depgraph"
+	rec "github.com/lf-edge/eve-libs/reconciler"
 )
 
 // Reconciliation status is accessed by matchers (see matchers_test.go).

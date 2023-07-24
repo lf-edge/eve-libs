@@ -10,7 +10,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/lf-edge/eve/libs/depgraph"
+	"github.com/lf-edge/eve-libs/depgraph"
 )
 
 var lastFileID int

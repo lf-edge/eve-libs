@@ -95,7 +95,7 @@ Only `Name()`, `Type()` and `Dependencies()` methods are shown here. For other
 required methods, please see the `Item` interface definition.
 
 ```go
-import "github.com/lf-edge/eve/libs/depgraph"
+import "github.com/lf-edge/eve-libs/depgraph"
 
 type LinuxInterface struct {
     name string
@@ -162,7 +162,7 @@ to build a dependency graph to model some kind of system state.
 Graph with some initial content is created using `New()`:
 
 ```go
-import "github.com/lf-edge/eve/libs/depgraph"
+import "github.com/lf-edge/eve-libs/depgraph"
 
 // using LinuxRoute and LinuxInterface defined above
 
@@ -191,7 +191,7 @@ A single item is manipulated using `Item()`, `PutItem()` and `DelItem()` methods
 ```go
 import (
     "fmt"
-    "github.com/lf-edge/eve/libs/depgraph"
+    "github.com/lf-edge/eve-libs/depgraph"
 )
 
 // Add new Linux route (nil ItemState).

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/lf-edge/eve/libs/depgraph"
+	"github.com/lf-edge/eve-libs/depgraph"
 )
 
 // directory represents a file-system directory.

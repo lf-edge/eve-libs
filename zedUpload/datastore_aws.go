@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	zedAWS "github.com/lf-edge/eve/libs/zedUpload/awsutil"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	zedAWS "github.com/lf-edge/eve-libs/zedUpload/awsutil"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 // Action : execute selected action targeting AWS datastore.

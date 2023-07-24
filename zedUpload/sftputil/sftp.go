@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )

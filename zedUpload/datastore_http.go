@@ -9,9 +9,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	zedHttp "github.com/lf-edge/eve/libs/zedUpload/httputil"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	zedHttp "github.com/lf-edge/eve-libs/zedUpload/httputil"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 type HttpTransportMethod struct {

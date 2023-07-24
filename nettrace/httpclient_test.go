@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
+	"github.com/lf-edge/eve-libs/nettrace"
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
 )

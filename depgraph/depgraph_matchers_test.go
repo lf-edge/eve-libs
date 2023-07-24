@@ -10,9 +10,8 @@ import (
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/types"
 
-	. "github.com/lf-edge/eve/libs/depgraph"
+	. "github.com/lf-edge/eve-libs/depgraph"
 )
-
 
 // ContainItem checks if iterated list of items includes the given item.
 func ContainItem(item mockItem) types.GomegaMatcher {
@@ -45,7 +44,7 @@ func (m *mockItemMatcher) Match(actual interface{}) (success bool, err error) {
 	case []mockItem:
 		return m.matchSliceWithItems(items)
 	default:
-		return false, fmt.Errorf("mockItemMatcher expects an item iterator "+
+		return false, fmt.Errorf("mockItemMatcher expects an item iterator " +
 			"or a slice with items or at least with their references")
 	}
 }

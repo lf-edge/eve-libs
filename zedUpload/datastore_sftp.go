@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	sftp "github.com/lf-edge/eve/libs/zedUpload/sftputil"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	sftp "github.com/lf-edge/eve-libs/zedUpload/sftputil"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 type SftpTransportMethod struct {

@@ -11,9 +11,9 @@ import (
 
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	azure "github.com/lf-edge/eve/libs/zedUpload/azureutil"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	azure "github.com/lf-edge/eve-libs/zedUpload/azureutil"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 // Action : execute selected action targeting Azure datastore.

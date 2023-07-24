@@ -22,7 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 // CustomReader contains the details of Chunks being downloaded
@@ -211,8 +211,8 @@ func (s *S3ctx) downloadPart(ch chan *partS3, wg *sync.WaitGroup) {
 	}
 }
 
-//getNeededParts returns description of parts of file to download
-//it skips parts from doneParts slice which are fully downloaded
+// getNeededParts returns description of parts of file to download
+// it skips parts from doneParts slice which are fully downloaded
 func getNeededParts(cWriterOptions *writerOptions, bname, bkey string, doneParts types.DownloadedParts, size int64) []*partS3 {
 	partsCount := int64(math.Ceil(float64(size) / float64(S3PartSize)))
 	var needed []*partS3

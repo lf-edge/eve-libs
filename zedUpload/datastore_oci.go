@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lf-edge/eve/libs/nettrace"
-	ociutil "github.com/lf-edge/eve/libs/zedUpload/ociutil"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/nettrace"
+	ociutil "github.com/lf-edge/eve-libs/zedUpload/ociutil"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 // OCITransportMethod transport method to send images from OCI distribution

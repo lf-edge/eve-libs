@@ -16,7 +16,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 	"github.com/sirupsen/logrus"
 )
 
@@ -345,7 +345,7 @@ func DockerHashFromManifest(imageManifest []byte) (string, error) {
 	return layers[len(layers)-1].Digest.Hex, nil
 }
 
-//checkAndCorrectHash prepends algo "sha256:" if not already present.
+// checkAndCorrectHash prepends algo "sha256:" if not already present.
 func checkAndCorrectHash(hash string) string {
 	return fmt.Sprintf("sha256:%s", strings.TrimPrefix(hash, "sha256:"))
 }

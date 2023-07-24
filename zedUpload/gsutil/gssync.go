@@ -13,10 +13,10 @@ import (
 
 	"google.golang.org/api/iterator"
 
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
-//Resp structure for response
+// Resp structure for response
 type Resp struct {
 	Name string
 	List []string //list of images at given path
@@ -30,7 +30,7 @@ type CustomReader struct {
 	prgNotify types.StatsNotifChan
 }
 
-//Read with updates notification
+// Read with updates notification
 func (r *CustomReader) Read(p []byte) (int, error) {
 	n, err := r.fp.Read(p)
 	if err != nil {
@@ -41,7 +41,7 @@ func (r *CustomReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-//ReadAt with updates notification
+// ReadAt with updates notification
 func (r *CustomReader) ReadAt(p []byte, off int64) (int, error) {
 	n, err := r.fp.ReadAt(p, off)
 	if err != nil {
@@ -55,12 +55,12 @@ func (r *CustomReader) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-//Seek implementation
+// Seek implementation
 func (r *CustomReader) Seek(offset int64, whence int) (int64, error) {
 	return r.fp.Seek(offset, whence)
 }
 
-//CustomWriter with notification on updates
+// CustomWriter with notification on updates
 type CustomWriter struct {
 	fp        *os.File
 	upSize    types.UpdateStats
@@ -68,7 +68,7 @@ type CustomWriter struct {
 	prgNotify types.StatsNotifChan
 }
 
-//Write with notification on updates
+// Write with notification on updates
 func (r *CustomWriter) Write(p []byte) (int, error) {
 	n, err := r.fp.Write(p)
 	if err != nil {
@@ -81,7 +81,7 @@ func (r *CustomWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-//WriteAt with notification on updates
+// WriteAt with notification on updates
 func (r *CustomWriter) WriteAt(p []byte, off int64) (int, error) {
 	n, err := r.fp.WriteAt(p, off)
 	if err != nil {
@@ -95,12 +95,12 @@ func (r *CustomWriter) WriteAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-//Seek implementation
+// Seek implementation
 func (r *CustomWriter) Seek(offset int64, whence int) (int64, error) {
 	return r.fp.Seek(offset, whence)
 }
 
-//UploadFile to Google Storage
+// UploadFile to Google Storage
 func (s *GSctx) UploadFile(fname, bname, bkey string, compression bool, prgNotify types.StatsNotifChan) (string, error) {
 	location := ""
 
@@ -167,7 +167,7 @@ func (s *GSctx) UploadFile(fname, bname, bkey string, compression bool, prgNotif
 	return location, nil
 }
 
-//DownloadFile from Google Storage
+// DownloadFile from Google Storage
 func (s *GSctx) DownloadFile(fname, bname, bkey string,
 	bsize int64, prgNotify types.StatsNotifChan) error {
 
@@ -204,7 +204,7 @@ func (s *GSctx) DownloadFile(fname, bname, bkey string,
 	return nil
 }
 
-//ListImages in Google Storage
+// ListImages in Google Storage
 func (s *GSctx) ListImages(bname string, prgNotify types.StatsNotifChan) ([]string, error) {
 	var img []string
 
@@ -227,7 +227,7 @@ func (s *GSctx) ListImages(bname string, prgNotify types.StatsNotifChan) ([]stri
 	return img, nil
 }
 
-//GetObjectMetaData located in Google Storage
+// GetObjectMetaData located in Google Storage
 func (s *GSctx) GetObjectMetaData(bname, bkey string) (int64, string, error) {
 	bsize, err := s.GetObjectSize(bname, bkey)
 	if err != nil {

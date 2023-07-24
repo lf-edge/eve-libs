@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	dg "github.com/lf-edge/eve/libs/depgraph"
+	dg "github.com/lf-edge/eve-libs/depgraph"
 )
 
 // Reconciler implements state reconciliation using two dependency graphs,

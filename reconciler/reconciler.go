@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	dg "github.com/lf-edge/eve/libs/depgraph"
+	dg "github.com/lf-edge/eve-libs/depgraph"
 )
 
 // reconciler implements Reconciler API

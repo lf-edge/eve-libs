@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/lf-edge/eve/libs/depgraph"
+	"github.com/lf-edge/eve-libs/depgraph"
 )
 
 type mockItemAttrs struct {

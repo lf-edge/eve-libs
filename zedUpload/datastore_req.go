@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lf-edge/eve/libs/zedUpload/types"
+	"github.com/lf-edge/eve-libs/zedUpload/types"
 )
 
 var (

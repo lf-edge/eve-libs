@@ -10,7 +10,7 @@ import (
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/types"
 
-	rec "github.com/lf-edge/eve/libs/reconciler"
+	rec "github.com/lf-edge/eve-libs/reconciler"
 )
 
 // BeMockItem checks if expectation matches the given mock Item.

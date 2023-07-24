@@ -91,7 +91,7 @@ the client (so that it can add some hooks for tracing purposes). Meaning that in
 
 ```go
 import (
-    "github.com/lf-edge/eve/libs/nettrace"
+    "github.com/lf-edge/eve-libs/nettrace"
 )
 
 func main() {

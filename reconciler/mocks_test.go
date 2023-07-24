@@ -10,8 +10,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/lf-edge/eve/libs/depgraph"
-	"github.com/lf-edge/eve/libs/reconciler"
+	"github.com/lf-edge/eve-libs/depgraph"
+	"github.com/lf-edge/eve-libs/reconciler"
 )
 
 // Mock asynchronous operations take 3 seconds to complete.

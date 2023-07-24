@@ -1,4 +1,4 @@
-module github.com/lf-edge/eve/libs
+module github.com/lf-edge/eve-libs
 
 go 1.20
 

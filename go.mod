@@ -39,6 +39,7 @@ require (
 	golang.org/x/crypto v0.1.0
 	golang.org/x/oauth2 v0.4.0
 	google.golang.org/api v0.103.0
+	gotest.tools v2.2.0+incompatible
 )
 
 require (

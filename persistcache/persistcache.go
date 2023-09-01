@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type persistCache struct {
@@ -15,6 +16,12 @@ type persistCache struct {
 }
 
 const FILE_MASK = 0755
+
+type InvalidKeyError struct{}
+
+func (e *InvalidKeyError) Error() string {
+	return "Key is invalid"
+}
 
 // Load values from cache or creates path if there's none
 func Load(path string) (*persistCache, error) {
@@ -53,6 +60,10 @@ func (pc *persistCache) Get(key string) (string, bool) {
 
 // Create or update value in in-memory cache and filesystem
 func (pc *persistCache) Put(key string, val string) (string, error) {
+	if !isValidKey(key) {
+		return "", &InvalidKeyError{}
+	}
+
 	pc.cache[key] = val
 
 	// save file
@@ -73,4 +84,13 @@ func (pc *persistCache) Put(key string, val string) (string, error) {
 func (pc *persistCache) Delete(key string) error {
 	delete(pc.cache, key)
 	return os.Remove(filepath.Join(pc.root, key))
+}
+
+func isValidKey(key string) bool {
+	// in case of key being ../../../../../../etc/passwd
+	if strings.Contains(key, "/") {
+		return false
+	}
+
+	return true
 }

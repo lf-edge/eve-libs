@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type persistCache struct {
+	sync.Mutex
 	cache map[string]string
 	root  string
 }
@@ -54,12 +56,18 @@ func Load(path string) (*persistCache, error) {
 
 // Get value from cache
 func (pc *persistCache) Get(key string) (string, bool) {
+	pc.Lock()
+	defer pc.Unlock()
+
 	val, ok := pc.cache[key]
 	return val, ok
 }
 
 // Create or update value in in-memory cache and filesystem
 func (pc *persistCache) Put(key string, val string) (string, error) {
+	pc.Lock()
+	defer pc.Unlock()
+
 	if !isValidKey(key) {
 		return "", &InvalidKeyError{}
 	}
@@ -82,6 +90,9 @@ func (pc *persistCache) Put(key string, val string) (string, error) {
 
 // Remove element from cache and filesystem
 func (pc *persistCache) Delete(key string) error {
+	pc.Lock()
+	defer pc.Unlock()
+
 	delete(pc.cache, key)
 	return os.Remove(filepath.Join(pc.root, key))
 }

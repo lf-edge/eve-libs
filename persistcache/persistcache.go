@@ -25,6 +25,12 @@ func (e *InvalidKeyError) Error() string {
 	return "Key is invalid"
 }
 
+type InvalidValueError struct{}
+
+func (e *InvalidValueError) Error() string {
+	return "Value is invalid"
+}
+
 // Load values from cache or creates path if there's none
 func Load(path string) (*persistCache, error) {
 	pc := &persistCache{}
@@ -42,16 +48,24 @@ func Load(path string) (*persistCache, error) {
 			return nil
 		}
 
-		val, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		pc.cache[di.Name()] = string(val)
+		// lazy initialization
+		pc.cache[di.Name()] = ""
 
 		return nil
 	})
 	return pc, err
+}
+
+func (pc *persistCache) loadObject(objName string) error {
+	path := filepath.Join(pc.root, objName)
+	val, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	pc.cache[filepath.Base(path)] = string(val)
+
+	return nil
 }
 
 // Get value from cache
@@ -59,7 +73,12 @@ func (pc *persistCache) Get(key string) (string, bool) {
 	pc.Lock()
 	defer pc.Unlock()
 
+	if pc.cache[key] == "" {
+		pc.loadObject(key)
+	}
+
 	val, ok := pc.cache[key]
+
 	return val, ok
 }
 
@@ -70,6 +89,9 @@ func (pc *persistCache) Put(key string, val string) (string, error) {
 
 	if !isValidKey(key) {
 		return "", &InvalidKeyError{}
+	}
+	if !isValidValue(val) {
+		return "", &InvalidValueError{}
 	}
 
 	pc.cache[key] = val
@@ -104,4 +126,10 @@ func isValidKey(key string) bool {
 	}
 
 	return true
+}
+
+func isValidValue(val string) bool {
+	// because we lazy initialize strings with empty value
+	// and it doesn't make sense create file with empty contents
+	return val != ""
 }

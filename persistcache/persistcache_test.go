@@ -39,9 +39,14 @@ func TestPut(test *testing.T) {
 	expected, _ = pc.Get(obj1.Name)
 	assert.Equal(test, newVal, expected)
 
-	// Try to insert malicious value
+	// Try to insert malicious key
 	expected, err := pc.Put("../../../../etc/passwd", "myNewPassword")
 	assert.Equal(test, &persistcache.InvalidKeyError{}, err)
+	assert.Equal(test, "", expected)
+
+	// Try to insert empty value
+	expected, err = pc.Put("dummy", "")
+	assert.Equal(test, &persistcache.InvalidValueError{}, err)
 	assert.Equal(test, "", expected)
 }
 

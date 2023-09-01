@@ -25,3 +25,7 @@ library behaviour.
 ### Why we are storing separate files and not saving whole structure as file?
 + If objects stored are large it takes less time to save/update them and less code
 + Access to cache file is easier
+
+### Why store `string` and not `interface{}`
+This way library user bears responsibility of marshalling and unmarshalling object on his side, keeping this
+library simple

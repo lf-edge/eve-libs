@@ -40,5 +40,7 @@ jobs:
         uses: golangci/golangci-lint-action@v3
         with:
           version: v1.53
-      - name: test
+          skip-pkg-cache: true
+      - name: test # requires building binaries and running them; sufficient to run on native arch
+        if: matrix.target.arch == 'amd64' && matrix.target.os == 'linux'
         run: go test ./... -race

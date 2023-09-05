@@ -113,7 +113,7 @@ func (ctx *DronaCtx) handleRequest(req *DronaRequest) error {
 		return err
 	}
 	go func() {
-		err = trp.Action(req)
+		err := trp.Action(req)
 
 		// No matter what post response
 		ctx.postResponse(req, err)

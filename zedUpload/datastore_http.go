@@ -52,7 +52,7 @@ func (ep *HttpTransportMethod) Action(req *DronaRequest) error {
 		err = fmt.Errorf("Unknown HTTP datastore operation")
 	}
 
-	req.asize = int64(size)
+	req.updateAsize(int64(size))
 	if err != nil {
 		req.status = fmt.Sprintf("%v", err)
 	}

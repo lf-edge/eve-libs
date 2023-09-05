@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"os"
@@ -29,7 +28,7 @@ func ensureFile(filename string, size int64) error {
 		if _, err := r.Read(p); err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile(filename, p, 0644); err != nil {
+		if err := os.WriteFile(filename, p, 0644); err != nil {
 			return err
 		}
 	}
@@ -146,6 +145,7 @@ type unstableProxyCtx struct {
 	delay         time.Duration
 	dropPercent   int
 	laddr, raddr  *net.TCPAddr
+	seed          int64
 }
 
 type unstableProxy struct {
@@ -153,12 +153,12 @@ type unstableProxy struct {
 	lconn, rconn                           io.ReadWriteCloser
 	wg                                     sync.WaitGroup
 	ctx                                    *unstableProxyCtx
+	seed                                   int64
 }
 
-//newUnstableProxyStart creates proxy on :lport to connect to addr:rport with dropPercent of bytes
-//during delay time after startFromByte bytes received
+// newUnstableProxyStart creates proxy on :lport to connect to addr:rport with dropPercent of bytes
+// during delay time after startFromByte bytes received
 func newUnstableProxyStart(lport, rport int, addr string, startFromByte uint64, delay time.Duration, dropPercent int) error {
-	rand.Seed(time.Now().Unix())
 	laddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%d", lport))
 	if err != nil {
 		return fmt.Errorf("failed to resolve local address: %s", err)
@@ -177,6 +177,7 @@ func newUnstableProxyStart(lport, rport int, addr string, startFromByte uint64, 
 		startFromByte: startFromByte,
 		delay:         delay,
 		dropPercent:   dropPercent,
+		seed:          time.Now().UnixNano(),
 	}
 
 	go func() {
@@ -199,6 +200,7 @@ func (ctx *unstableProxyCtx) newUnstableProxy(lconn *net.TCPConn) *unstableProxy
 	return &unstableProxy{
 		lconn: lconn,
 		ctx:   ctx,
+		seed:  ctx.seed,
 	}
 }
 
@@ -229,6 +231,7 @@ func (p *unstableProxy) start() {
 func (p *unstableProxy) pipe(src, dst io.ReadWriteCloser) {
 	defer p.wg.Done()
 	isSend := src == p.lconn
+	r := rand.New(rand.NewSource(p.seed))
 
 	bufLen := 1024
 	buff := make([]byte, bufLen)
@@ -258,7 +261,7 @@ func (p *unstableProxy) pipe(src, dst io.ReadWriteCloser) {
 			deferClose = true
 		}
 
-		discard := p.ctx.limit && rand.Intn(100) < p.ctx.dropPercent
+		discard := p.ctx.limit && r.Intn(100) < p.ctx.dropPercent
 
 		if !discard {
 			n, err = dst.Write(buff[:n])

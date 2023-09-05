@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -168,7 +167,7 @@ func ExecCmd(ctx context.Context, cmd, host, remoteFile, localFile string, objSi
 			}
 			resp.Body.Close()
 		}
-		Body, _ := ioutil.ReadAll(resp.Body)
+		Body, _ := io.ReadAll(resp.Body)
 		stats.Asize = int64(len(Body))
 		types.SendStats(prgNotify, stats)
 		rsp.BodyLength = len(Body)

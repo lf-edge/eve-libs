@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"os"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 )
 
@@ -138,151 +135,99 @@ func md5sum(r io.ReadSeeker, start, length int64) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-type unstableProxyCtx struct {
-	limited       bool
-	limit         bool
-	startFromByte uint64
-	delay         time.Duration
-	dropPercent   int
-	laddr, raddr  *net.TCPAddr
-	seed          int64
+type unstableFileReader struct {
+	readSeekCloser     io.ReadSeekCloser
+	read               uint64
+	sent               uint64
+	discarded          uint64
+	unstableStartBytes uint64
+	unstableStartTime  time.Time
+	unstableEndTime    time.Time
+	unstableDuration   time.Duration
+	dropPercent        int
+	rand               *rand.Rand
+	logger             func(string, ...interface{})
 }
 
-type unstableProxy struct {
-	receivedBytes, sentBytes, discardBytes uint64
-	lconn, rconn                           io.ReadWriteCloser
-	wg                                     sync.WaitGroup
-	ctx                                    *unstableProxyCtx
-	seed                                   int64
+func (u *unstableFileReader) Read(p []byte) (n int, err error) {
+	// get the current time
+	now := time.Now()
+
+	buf := make([]byte, len(p))
+	n, err = u.readSeekCloser.Read(buf)
+	if err != nil && err != io.EOF {
+		return n, err
+	}
+	u.read += uint64(n)
+	// copy the data if any of the following are true:
+	// - we have not yet read the minimum number of bytes
+	// - we are not yet at unstable start time
+	// - we are past unstable end time, but check that endTime was set
+	// - we are within the random setting of percentage to drop
+
+	// it can end during one of:
+	// - middle of a read, if the duration is complete before we finished reading
+	// - during an EOF, if we finished the reading before duration and are waiting
+	if u.read < u.unstableStartBytes || now.Before(u.unstableStartTime) || (!u.unstableEndTime.IsZero() && now.After(u.unstableEndTime)) || u.rand.Intn(100) >= u.dropPercent {
+		copy(p, buf)
+		u.sent += uint64(n)
+	} else {
+		// if this is the first discard - i.e. we never set the start or end time for the delay -
+		// then set them
+		if u.unstableStartTime.IsZero() {
+			u.unstableStartTime = now
+			u.unstableEndTime = now.Add(u.unstableDuration)
+			if u.logger != nil {
+				u.logger("Limit starts at: %s", now)
+			}
+		}
+		if now == u.unstableEndTime && u.logger != nil {
+			u.logger("Limit ends while still reading at: %s", now)
+		}
+
+		// we are at discard stage
+		u.discarded += uint64(n)
+		n = 0
+	}
+	if err == io.EOF {
+		if now.Before(u.unstableEndTime) {
+			if u.logger != nil {
+				u.logger("Finished reading before end time, waiting until: %s", u.unstableEndTime)
+			}
+			time.Sleep(u.unstableEndTime.Sub(now))
+			if u.logger != nil {
+				u.logger("Limit ends at: %s", time.Now())
+			}
+		}
+		u.logFinal()
+	}
+	return
 }
 
-// newUnstableProxyStart creates proxy on :lport to connect to addr:rport with dropPercent of bytes
-// during delay time after startFromByte bytes received
-func newUnstableProxyStart(lport, rport int, addr string, startFromByte uint64, delay time.Duration, dropPercent int) error {
-	laddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%d", lport))
-	if err != nil {
-		return fmt.Errorf("failed to resolve local address: %s", err)
-	}
-	raddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", addr, rport))
-	if err != nil {
-		return fmt.Errorf("failed to resolve remote address: %s", err)
-	}
-	listener, err := net.ListenTCP("tcp", laddr)
-	if err != nil {
-		return fmt.Errorf("failed to open local port to listen: %s", err)
-	}
-	uProxy := &unstableProxyCtx{
-		laddr:         laddr,
-		raddr:         raddr,
-		startFromByte: startFromByte,
-		delay:         delay,
-		dropPercent:   dropPercent,
-		seed:          time.Now().UnixNano(),
-	}
-
-	go func() {
-		for {
-			conn, err := listener.AcceptTCP()
-			if err != nil {
-				fmt.Printf("Failed to accept connection '%s'", err)
-				continue
-			}
-
-			p := uProxy.newUnstableProxy(conn)
-
-			go p.start()
-		}
-	}()
-	return nil
+func (u *unstableFileReader) Seek(offset int64, whence int) (int64, error) {
+	return u.readSeekCloser.Seek(offset, whence)
 }
 
-func (ctx *unstableProxyCtx) newUnstableProxy(lconn *net.TCPConn) *unstableProxy {
-	return &unstableProxy{
-		lconn: lconn,
-		ctx:   ctx,
-		seed:  ctx.seed,
+func (u *unstableFileReader) Close() error {
+	u.logFinal()
+	return u.readSeekCloser.Close()
+}
+
+func (u *unstableFileReader) logFinal() {
+	if u.logger != nil {
+		u.logger("Closed (%d bytes read, %d bytes sent, %d bytes discarded)", u.read, u.sent, u.discarded)
 	}
 }
 
-func (p *unstableProxy) start() {
-	defer p.lconn.Close()
-
-	var err error
-
-	p.rconn, err = net.DialTCP("tcp", nil, p.ctx.raddr)
-	if err != nil {
-		fmt.Printf("Remote connection failed: %s\n", err)
-		return
+// newUnstabileFileReader file reader that will drop dropPercent of the data after unstableStartBytes
+// is read, for unstableDuration. When the file is completely read, it will close normally.
+func newUnstableFileReader(r io.ReadSeekCloser, unstableStartBytes uint64, unstableDuration time.Duration, dropPercent int, logger func(string, ...interface{})) io.ReadSeekCloser {
+	return &unstableFileReader{
+		readSeekCloser:     r,
+		unstableStartBytes: unstableStartBytes,
+		unstableDuration:   unstableDuration,
+		dropPercent:        dropPercent,
+		logger:             logger,
+		rand:               rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	defer p.rconn.Close()
-
-	fmt.Printf("Opened %s >>> %s\n", p.ctx.laddr.String(), p.ctx.raddr.String())
-
-	p.wg.Add(2)
-
-	go p.pipe(p.lconn, p.rconn)
-	go p.pipe(p.rconn, p.lconn)
-
-	p.wg.Wait()
-
-	fmt.Printf("Closed (%d bytes sent, %d bytes received, %d bytes discard)\n", p.sentBytes, p.receivedBytes, p.discardBytes)
-}
-
-func (p *unstableProxy) pipe(src, dst io.ReadWriteCloser) {
-	defer p.wg.Done()
-	isSend := src == p.lconn
-	r := rand.New(rand.NewSource(p.seed))
-
-	bufLen := 1024
-	buff := make([]byte, bufLen)
-	deferClose := false
-	for deferClose == false {
-		if !isSend {
-			if p.receivedBytes+uint64(bufLen) > p.ctx.startFromByte && !p.ctx.limited {
-				if !p.ctx.limited && !p.ctx.limit {
-					fmt.Println("Limit started at: ", time.Now().String())
-					p.ctx.limit = true
-					time.AfterFunc(p.ctx.delay, func() {
-						fmt.Println("Limit ended at: ", time.Now().String())
-						p.ctx.limited = true
-						p.ctx.limit = false
-					})
-				}
-			}
-		}
-		n, err := src.Read(buff)
-		if err != nil && err != io.EOF {
-			if !strings.Contains(err.Error(), "use of closed network connection") {
-				fmt.Printf("Read failed '%s'\n", err)
-			}
-			return
-		}
-		if err == io.EOF {
-			deferClose = true
-		}
-
-		discard := p.ctx.limit && r.Intn(100) < p.ctx.dropPercent
-
-		if !discard {
-			n, err = dst.Write(buff[:n])
-		}
-
-		if err != nil {
-			if err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
-				fmt.Printf("Write failed '%s'\n", err)
-			}
-			return
-		}
-		if isSend {
-			p.sentBytes += uint64(n)
-		} else {
-			if discard {
-				p.discardBytes += uint64(n)
-			} else {
-				p.receivedBytes += uint64(n)
-			}
-		}
-	}
-	_ = src.Close()
-	_ = dst.Close()
 }

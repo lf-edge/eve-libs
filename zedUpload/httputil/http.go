@@ -322,7 +322,7 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 			copiedSize += written
 
 			if copyErr != nil {
-				if objSize != copiedSize {
+				if objSize != copiedSize && objSize != 0 {
 					if innerCtx.Err() != nil {
 						// the error comes from canceled context, which indicates inactivity timeout
 						appendToErrorList("inactivity for %s", inactivityTimeout)

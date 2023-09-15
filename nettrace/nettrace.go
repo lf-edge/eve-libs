@@ -45,19 +45,23 @@ type PacketCapture struct {
 }
 
 // WriteTo writes packet capture to a file or a buffer or whatever w represents.
-func (pc PacketCapture) WriteTo(w io.Writer) error {
+func (pc PacketCapture) WriteTo(w io.Writer) (int64, error) {
+	var written int64
 	pw := pcapgo.NewWriter(w)
 	err := pw.WriteFileHeader(pc.SnapLen, layers.LinkTypeEthernet)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	for _, packet := range pc.Packets {
-		err = pw.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+		data := packet.Data()
+		written += int64(len(data))
+		_ = written
+		err = pw.WritePacket(packet.Metadata().CaptureInfo, data)
 		if err != nil {
-			return err
+			return written, err
 		}
 	}
-	return nil
+	return written, nil
 }
 
 // WriteToFile saves packet capture to a given file.
@@ -67,7 +71,8 @@ func (pc PacketCapture) WriteToFile(filename string) error {
 		return err
 	}
 	defer f.Close()
-	return pc.WriteTo(f)
+	_, err = pc.WriteTo(f)
+	return err
 }
 
 // AnyNetTrace is implemented by NetTrace and all its extensions (like HTTPTrace).

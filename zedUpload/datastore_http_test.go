@@ -39,7 +39,7 @@ func TestHTTPDatastore(t *testing.T) {
 	t.Run("Repeat", testHTTPDatastoreRepeat)
 }
 
-func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, operation zedUpload.SyncOpType, local bool) (bool, string) {
+func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, operation zedUpload.SyncOpType, local bool, syncerOpts ...zedUpload.SyncerDestOption) (bool, string) {
 	respChan := make(chan *zedUpload.DronaRequest)
 
 	httpAuth := &zedUpload.AuthInput{AuthType: "http"}
@@ -49,7 +49,7 @@ func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, 
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, dir, httpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, dir, httpAuth, syncerOpts...)
 	if err == nil && dEndPoint != nil {
 		if local {
 			var lIP net.IP
@@ -294,6 +294,11 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 	} else {
 		t.Log("Running HTTP repeat test suite.")
 
+		var (
+			inactivityTimeout = 10 * time.Second
+			unstableDelay     = 15 * time.Second // this just needs to be a little longer than the previous
+		)
+
 		// make a random file
 		infile := httpDownloadDir + "input"
 		if _, err := os.Stat(infile); err == nil {
@@ -340,14 +345,12 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 
 		// create the test server
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// have the served file "hiccup", i.e. drop packets for 330 seconds (5.5 minutes) after 50MB have been transferred
-			// 5.5 mins is chosen because the inactivity timeout for the client is 5 minutes
-			http.ServeContent(w, r, "input", time.Now(), newUnstableFileReader(f, uint64(size/2), 330*time.Second, 100, t.Logf))
+			http.ServeContent(w, r, "input", time.Now(), newUnstableFileReader(f, uint64(size/2), unstableDelay, 100, t.Logf))
 		}))
 		defer ts.Close()
 
 		outfile := filepath.Join(httpDownloadDir, "repeat2")
-		status, msg := operationHTTP(t, outfile, "path/does/not/matter/with/fixed/server", ts.URL, "", zedUpload.SyncOpDownload, true)
+		status, msg := operationHTTP(t, outfile, "path/does/not/matter/with/fixed/server", ts.URL, "", zedUpload.SyncOpDownload, true, zedUpload.WithHttpInactivityTimeout(inactivityTimeout))
 		if status {
 			t.Errorf("%v", msg)
 		}

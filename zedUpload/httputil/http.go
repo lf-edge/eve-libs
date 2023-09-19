@@ -255,14 +255,7 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 			copiedSize = 0
 			forceRestart = false
 		}
-		// we need innerCtx cancel to call in case of inactivity
-		innerCtx, innerCtxCancel := context.WithCancel(ctx)
-		inactivityTimer := time.AfterFunc(inactivityTimeout, func() {
-			//keep it to call cancel regardless of logic to releases resources
-			innerCtxCancel()
-		})
-		defer inactivityTimer.Stop()
-		req, err := http.NewRequestWithContext(innerCtx, http.MethodGet, host, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, host, nil)
 		if err != nil {
 			appendToErrorList("request failed for get %s: %s", host, err)
 			return stats, Resp{}
@@ -275,6 +268,10 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 		if supportRange && copiedSize > 0 {
 			withRange = true
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", copiedSize))
+		}
+		// set the inactivity timer just for retrieving the headers
+		if transport, ok := client.Transport.(*http.Transport); ok {
+			transport.ResponseHeaderTimeout = inactivityTimeout
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -317,12 +314,13 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 			rsp.BodyLength = int(resp.ContentLength)
 		}
 		var written int64
+
+		// use the inactivityReader to trigger failure for the timeouts
+		inactivityReader := NewTimeoutReader(inactivityTimeout, resp.Body)
 		for {
 			var copyErr error
 
-			// reset the timer for each read
-			inactivityTimer.Reset(inactivityTimeout)
-			written, copyErr = io.CopyN(local, resp.Body, chunkSize)
+			written, copyErr = io.CopyN(local, inactivityReader, chunkSize)
 			copiedSize += written
 			stats.Asize = copiedSize
 
@@ -339,7 +337,7 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 				// empty out the error list
 				errorList = nil
 				return stats, rsp
-			case copyErr != nil && innerCtx.Err() != nil:
+			case copyErr != nil && errors.Is(copyErr, &ErrTimeout{}):
 				// the error comes from timeout
 				appendToErrorList("inactivity for %s", inactivityTimeout)
 			case copyErr != nil:

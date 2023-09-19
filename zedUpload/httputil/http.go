@@ -27,8 +27,6 @@ const (
 	chunkSize  int64 = 64 * 1024
 	maxRetries       = 7 // gives ~1m of overall timeout
 	maxDelay         = time.Minute
-	// if chunkSize cannot be transmitted after inactivityTimeout we will re-schedule download, so we expect more than 218 B/s
-	inactivityTimeout = 5 * time.Minute
 )
 
 // Resp response data from executing commands
@@ -67,7 +65,7 @@ func getHref(token html.Token) (ok bool, href string) {
 // ExecCmd performs various commands such as "ls", "get", etc.
 // Note that "host" needs to contain the URL in the case of a get
 func ExecCmd(ctx context.Context, cmd, host, remoteFile, localFile string, objSize int64,
-	prgNotify types.StatsNotifChan, client *http.Client) (types.UpdateStats, Resp) {
+	prgNotify types.StatsNotifChan, client *http.Client, inactivityTimeout time.Duration) (types.UpdateStats, Resp) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -123,7 +121,7 @@ func ExecCmd(ctx context.Context, cmd, host, remoteFile, localFile string, objSi
 		rsp.List = imgList
 		return stats, rsp
 	case "get":
-		return execCmdGet(ctx, objSize, localFile, host, client, prgNotify)
+		return execCmdGet(ctx, objSize, localFile, host, client, prgNotify, inactivityTimeout)
 	case "post":
 		file, err := os.Open(localFile)
 		if err != nil {
@@ -196,10 +194,10 @@ func ExecCmd(ctx context.Context, cmd, host, remoteFile, localFile string, objSi
 	}
 }
 
-func execCmdGet(ctx context.Context, objSize int64, localFile string, host string, client *http.Client, prgNotify types.StatsNotifChan) (types.UpdateStats, Resp) {
+// execCmdGet executes the get command.
+// NOTE: These **must** be named return values, or our defer to modify them will not work.
+func execCmdGet(ctx context.Context, objSize int64, localFile string, host string, client *http.Client, prgNotify types.StatsNotifChan, inactivityTimeout time.Duration) (stats types.UpdateStats, rsp Resp) {
 	var copiedSize int64
-	stats := types.UpdateStats{}
-	rsp := Resp{}
 
 	stats.Size = objSize
 	dirErr := os.MkdirAll(filepath.Dir(localFile), 0755)
@@ -215,6 +213,11 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 	defer local.Close()
 
 	var errorList []string
+	defer func() {
+		if len(errorList) > 0 {
+			stats.Error = fmt.Errorf("%s: %s", host, strings.Join(errorList, "; "))
+		}
+	}()
 	supportRange := false //is server supports ranges requests, false for the first request
 	forceRestart := false
 	delay := time.Second
@@ -258,10 +261,10 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 			//keep it to call cancel regardless of logic to releases resources
 			innerCtxCancel()
 		})
+		defer inactivityTimer.Stop()
 		req, err := http.NewRequestWithContext(innerCtx, http.MethodGet, host, nil)
 		if err != nil {
-			stats.Error = fmt.Errorf("request failed for get %s: %s",
-				host, err)
+			appendToErrorList("request failed for get %s: %s", host, err)
 			return stats, Resp{}
 		}
 		req.Header.Set("User-Agent", userAgent)
@@ -282,6 +285,7 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 				appendToErrorList(NoSuitableAddrStr)
 				break
 			}
+			// timeout is like any other error, so will do retries
 			appendToErrorList("client.Do failed: %s", err)
 			continue
 		}
@@ -312,36 +316,44 @@ func execCmdGet(ctx context.Context, objSize int64, localFile string, host strin
 			// we received StatusOK which is the response for the whole content, not for the partial one
 			rsp.BodyLength = int(resp.ContentLength)
 		}
-		//reset to be not affected by the client.Do timeouts
-		inactivityTimer.Reset(inactivityTimeout)
 		var written int64
 		for {
 			var copyErr error
 
+			// reset the timer for each read
+			inactivityTimer.Reset(inactivityTimeout)
 			written, copyErr = io.CopyN(local, resp.Body, chunkSize)
 			copiedSize += written
-
-			if copyErr != nil {
-				if objSize != copiedSize && objSize != 0 {
-					if innerCtx.Err() != nil {
-						// the error comes from canceled context, which indicates inactivity timeout
-						appendToErrorList("inactivity for %s", inactivityTimeout)
-					} else if errors.Is(copyErr, io.EOF) {
-						appendToErrorList("premature EOF after %d out of %d bytes: %+v", copiedSize, objSize, copyErr)
-					} else {
-						appendToErrorList("error from CopyN after %d out of %d bytes: %v", copiedSize, objSize, copyErr)
-					}
-
-					stats.Error = fmt.Errorf("%s: %s", host, strings.Join(errorList, "; "))
-				}
-				return stats, rsp
-			}
-			//we received data so re-schedule inactivity timer
-			inactivityTimer.Reset(inactivityTimeout)
 			stats.Asize = copiedSize
-			types.SendStats(prgNotify, stats)
+
+			// possible situations:
+			// err != nil && err == io.EOF - end of file, wrap up and return
+			// err != nil && err == inactivityTimeout - begin a retry
+			// err != nil - wrap up and return
+			// err == nil - update stats and keep reading
+			switch {
+			case copyErr != nil && errors.Is(copyErr, io.EOF) && copiedSize != objSize && objSize != 0:
+				appendToErrorList("premature EOF after %d out of %d bytes: %+v", copiedSize, objSize, copyErr)
+				return stats, rsp
+			case copyErr != nil && errors.Is(copyErr, io.EOF):
+				// empty out the error list
+				errorList = nil
+				return stats, rsp
+			case copyErr != nil && innerCtx.Err() != nil:
+				// the error comes from timeout
+				appendToErrorList("inactivity for %s", inactivityTimeout)
+			case copyErr != nil:
+				appendToErrorList("error from CopyN after %d out of %d bytes: %v", copiedSize, objSize, copyErr)
+				return stats, rsp
+			default:
+				// no error, so just continue
+				types.SendStats(prgNotify, stats)
+				continue
+			}
+			// every other case either returns or continues; if we made it here,
+			// break io.CopyN loop, forcing a retry of the outer loop
+			break
 		}
 	}
-	stats.Error = fmt.Errorf("%s: %s", host, strings.Join(errorList, "; "))
 	return stats, rsp
 }

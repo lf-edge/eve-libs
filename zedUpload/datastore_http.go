@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultHttpInactivityTimeout = 5 * time.Minute
+	defaultHTTPInactivityTimeout = 5 * time.Minute
 )
 
 type HttpTransportMethod struct {
@@ -208,18 +208,18 @@ func (ep *HttpTransportMethod) NewRequest(opType SyncOpType, objname, objloc str
 
 	// if the inactivity timeout was not set, use the default
 	if ep.inactivityTimeout == 0 {
-		ep.inactivityTimeout = defaultHttpInactivityTimeout
+		ep.inactivityTimeout = defaultHTTPInactivityTimeout
 	}
 
 	return dR
 }
 
-// WithHttpInactivityTimeout set the inactivity timeout for HTTP datastore.
+// WithHTTPInactivityTimeout set the inactivity timeout for HTTP datastore.
 // Default if not set is 5 minutes.
 // This is different than the timeouts for individual sections available in
 // http.RoundTripper or the entire-transaction client.Timeout. This is reset every
 // time data is received, so it is an inactivity timeout.
-func WithHttpInactivityTimeout(timeout time.Duration) SyncerDestOption {
+func WithHTTPInactivityTimeout(timeout time.Duration) SyncerDestOption {
 	return func(endpoint DronaEndPoint) error {
 		var (
 			httpEp *HttpTransportMethod

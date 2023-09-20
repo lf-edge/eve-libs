@@ -40,6 +40,8 @@ func (r *TimeoutReader) Read(p []byte) (int, error) {
 	}
 }
 
+// ErrTimeout is the error returned when a timeout occurs. The error message
+// will be the timeout duration that was exceeded.
 type ErrTimeout struct {
 	timeout time.Duration
 }

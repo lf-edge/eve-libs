@@ -350,7 +350,7 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 		defer ts.Close()
 
 		outfile := filepath.Join(httpDownloadDir, "repeat2")
-		status, msg := operationHTTP(t, outfile, "path/does/not/matter/with/fixed/server", ts.URL, "", zedUpload.SyncOpDownload, true, zedUpload.WithHttpInactivityTimeout(inactivityTimeout))
+		status, msg := operationHTTP(t, outfile, "path/does/not/matter/with/fixed/server", ts.URL, "", zedUpload.SyncOpDownload, true, zedUpload.WithHTTPInactivityTimeout(inactivityTimeout))
 		if status {
 			t.Errorf("%v", msg)
 		}

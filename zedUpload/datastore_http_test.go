@@ -14,17 +14,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/lf-edge/eve-libs/zedUpload"
 )
 
 const (
 	// parameters for HTTP datastore
-	httpPostRegion  = "http://ptsv2.com/t/httptest/post"
-	httpURL         = "http://cloud-images.ubuntu.com"
-	httpDir         = "releases"
 	httpUploadFile  = uploadFile
 	httpDownloadDir = "./test/output/httpDownload/"
 )
+
+type logger interface {
+	Logf(format string, args ...interface{})
+	Errorf(format string, args ...interface{})
+}
 
 func TestHTTPDatastore(t *testing.T) {
 	if err := setup(); err != nil {
@@ -39,7 +42,16 @@ func TestHTTPDatastore(t *testing.T) {
 	t.Run("Repeat", testHTTPDatastoreRepeat)
 }
 
-func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, operation zedUpload.SyncOpType, local bool, syncerOpts ...zedUpload.SyncerDestOption) (bool, string) {
+// operationHTTP simple utility function for performing HTTP operations during testing. Parameters are:
+// - localPath: local file path
+// - remoteFilename: remote file name
+// - url: remote URL to server (not including path)
+// - remoteDir: remote directory path
+// - operation: operation to perform
+// - local: whether to use local IP address
+// - syncerOpts: optional syncer options
+// func operationHTTP(t *testing.T, localPath, remoteFilename, url, remoteDir string, operation zedUpload.SyncOpType, local bool, syncerOpts ...zedUpload.SyncerDestOption) (bool, string) {
+func operationHTTP(l logger, operation zedUpload.SyncOpType, url, remoteDir, remoteFilename, localPath string, local bool, syncerOpts ...zedUpload.SyncerDestOption) (bool, string) {
 	respChan := make(chan *zedUpload.DronaRequest)
 
 	httpAuth := &zedUpload.AuthInput{AuthType: "http"}
@@ -49,7 +61,7 @@ func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, 
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, dir, httpAuth, syncerOpts...)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, remoteDir, httpAuth, syncerOpts...)
 	if err == nil && dEndPoint != nil {
 		if local {
 			var lIP net.IP
@@ -63,7 +75,7 @@ func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, 
 			}
 		}
 		// create Request
-		req := dEndPoint.NewRequest(operation, objkey, objloc, 0, true, respChan)
+		req := dEndPoint.NewRequest(operation, remoteFilename, localPath, 0, true, respChan)
 		if req != nil {
 			_ = req.Post()
 		}
@@ -79,13 +91,13 @@ func operationHTTP(t *testing.T, objloc string, objkey string, url, dir string, 
 		if resp.IsDnUpdate() {
 			currentSize, totalSize, _ := resp.Progress()
 			if currentSize != lastCurrentSize {
-				t.Logf("Update progress for %v: %v/%v",
+				l.Logf("Update progress for %v: %v/%v",
 					resp.GetLocalName(), currentSize, totalSize)
 				lastCurrentSize = currentSize
 				lastUpdate = time.Now()
 			}
 			if time.Now().After(lastUpdate.Add(20 * time.Minute)) {
-				t.Errorf("No update during 20 minutes")
+				l.Errorf("No update during 20 minutes")
 				break
 			}
 			continue
@@ -129,6 +141,7 @@ func listHTTPFiles(t *testing.T, url, dir string) (bool, string) {
 	return isErr, status
 }
 
+// getHTTPObjectMetaData simple utility function for requesting metadata information about a remote object
 func getHTTPObjectMetaData(t *testing.T, objloc string, objkey string, url, dir string) (bool, string, int64) {
 	respChan := make(chan *zedUpload.DronaRequest)
 
@@ -163,72 +176,148 @@ func getHTTPObjectMetaData(t *testing.T, objloc string, objkey string, url, dir 
 	return isErr, status, length
 }
 
-func testHTTPObjectWithFile(t *testing.T, objloc, objkey, url, dir string) error {
-	statusMeta, msgMeta, size := getHTTPObjectMetaData(t, objloc, objkey, url, dir)
-	if statusMeta {
-		return fmt.Errorf(msgMeta)
-	}
-	statusDownload, msgDownload := operationHTTP(t, objloc, objkey, url, dir, zedUpload.SyncOpDownload, false)
-	if statusDownload {
-		return fmt.Errorf(msgDownload)
-	}
-	stat, err := os.Stat(objloc)
-	if err == nil {
-		if size != stat.Size() {
-			return fmt.Errorf("Download size didn't match %v - %v", size, stat.Size())
-		}
-	} else {
-		return err
-	}
-	return nil
-
-}
-
 func testHTTPDatastoreAPI(t *testing.T) {
-	t.Run("Upload=0", func(t *testing.T) {
-		status, msg := operationHTTP(t, httpUploadFile, "httpteststuff", httpPostRegion, "", zedUpload.SyncOpUpload, false)
-		if status {
-			t.Errorf("%v", msg)
+	// create the test server
+	// pretty simple:
+	// - any POST gets written to tempDir; the test should check the file
+	// - any GET gets checked in the local filesystem; the test should create the file. If it is a directory, it lists the file names
+	tempDir := t.TempDir()
+	r := mux.NewRouter()
+	r.Methods("POST").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dir := filepath.Join(tempDir, r.URL.Path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-	})
-	//t.Run("Upload=1", func(t *testing.T) { operationHTTP(t, httpUploadFile, "release/httpteststuff", httpPostRegion, zedUpload.SyncOpUpload) })
-	//t.Run("Upload=2", func(t *testing.T) {
-	//	operationHTTP(t, httpUploadFile, "release/1.0/httpteststuff", httpPostRegion, zedUpload.SyncOpUpload)
-	//})
-	t.Run("Download=0", func(t *testing.T) {
-		status, msg := operationHTTP(t, filepath.Join(httpDownloadDir, "file0"), "bionic/release-20210804/ubuntu-18.04-server-cloudimg-s390x-lxd.tar.xz", httpURL, httpDir, zedUpload.SyncOpDownload, false)
-		if status {
-			t.Errorf("%v", msg)
+		if err := r.ParseMultipartForm(20 * 1024 * 1024); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-	})
-	t.Run("Download=1", func(t *testing.T) {
-		status, msg := operationHTTP(t, filepath.Join(httpDownloadDir, "file1"), "minimal/releases/bionic/release-20210803/ubuntu-18.04-minimal-cloudimg-amd64-root.tar.xz", httpURL, "", zedUpload.SyncOpDownload, false)
-		if status {
-			t.Errorf("%v", msg)
+		for filename := range r.MultipartForm.File {
+			file, _, err := r.FormFile(filename)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			defer file.Close()
+			fullpath := filepath.Join(dir, filename)
+			f, err := os.Create(fullpath)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			defer f.Close()
+			if _, err := io.Copy(f, file); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 		}
+		w.WriteHeader(http.StatusCreated)
 	})
-	t.Run("Download=2", func(t *testing.T) {
-		status, msg := operationHTTP(t, filepath.Join(httpDownloadDir, "file2"), "xenial/release/ubuntu-16.04-server-cloudimg-amd64-disk1.img", httpURL, httpDir, zedUpload.SyncOpDownload, false)
-		if status {
-			t.Errorf("%v", msg)
+	r.Methods("GET").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := filepath.Join(tempDir, r.URL.Path)
+		// not found? return 404
+		if _, err := os.Stat(p); err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
+		// directory? send filenames; file? list filenames
+		http.ServeFile(w, r, p)
 	})
-	t.Run("List=0", func(t *testing.T) {
-		status, _ := listHTTPFiles(t, "http://1.2.3.4:80", "randompath")
-		if !status {
-			t.Errorf("Non-existent URL seems to exist")
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+	t.Run("Upload", func(t *testing.T) {
+		t.Run("valid", func(t *testing.T) {
+			filename := "httpteststuff"
+			status, msg := operationHTTP(t, zedUpload.SyncOpUpload, ts.URL, "", filename, httpUploadFile, false)
+			if status {
+				t.Fatalf("%v", msg)
+			}
+			// check that the contents of the file match; it should gave been placed in tempDir
+			inHash, err := sha256File(httpUploadFile)
+			if err != nil {
+				t.Errorf("%v", err)
+			}
+			outHash, err := sha256File(filepath.Join(tempDir, filename))
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			if inHash != outHash {
+				t.Errorf("hash mismatch infile %s outfile %s", inHash, outHash)
+			}
+		})
+		//t.Run("Upload=1", func(t *testing.T) { operationHTTP(t, httpUploadFile, "release/httpteststuff", httpPostRegion, zedUpload.SyncOpUpload) })
+		//t.Run("Upload=2", func(t *testing.T) {
+		//	operationHTTP(t, httpUploadFile, "release/1.0/httpteststuff", httpPostRegion, zedUpload.SyncOpUpload)
+		//})
+	})
+	t.Run("Download", func(t *testing.T) {
+		var downloadTest = func(filename, localName string, size int) error {
+			target := filepath.Join(httpDownloadDir, localName)
+			infile := filepath.Join(tempDir, filename)
+			_, inHash, err := createRandomFile(infile, size)
+			if err != nil {
+				return fmt.Errorf("unable to create random file %s: %v", filename, err)
+			}
+			defer os.Remove(target)
+			defer os.Remove(infile)
+			status, msg := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", filename, target, false)
+			if status {
+				return fmt.Errorf("%v", msg)
+			}
+			outHash, err := sha256File(target)
+			if err != nil {
+				return fmt.Errorf("unable to hash download file %s: %v", target, err)
+			}
+			if inHash != outHash {
+				return fmt.Errorf("hash mismatch infile %s outfile %s", inHash, outHash)
+			}
+			return nil
 		}
+		t.Run("valid", func(t *testing.T) {
+			if err := downloadTest("bionic/release-20210804/ubuntu-18.04-server-cloudimg-s390x-lxd.tar.xz", "file0", 1024*1024*100); err != nil {
+				t.Error(err)
+			}
+		})
+		t.Run("another", func(t *testing.T) {
+			if err := downloadTest("minimal/releases/bionic/release-20210803/ubuntu-18.04-minimal-cloudimg-amd64-root.tar.xz", "file1", 1024*1024*100); err != nil {
+				t.Error(err)
+			}
+		})
+		t.Run("one more", func(t *testing.T) {
+			if err := downloadTest("xenial/release/ubuntu-16.04-server-cloudimg-amd64-disk1.img", "file2", 1024*1024*100); err != nil {
+				t.Error(err)
+			}
+		})
 	})
-	//t.Run("List=1", func(t *testing.T) { listHTTPFiles(t, "http://192.168.0.147:80") })
-	t.Run("List=2", func(t *testing.T) {
-		status, msg := listHTTPFiles(t, httpURL, httpDir+"/")
-		if status {
-			t.Errorf("%v", msg)
+	t.Run("List", func(t *testing.T) {
+		t.Run("non-existent URL", func(t *testing.T) {
+			status, _ := listHTTPFiles(t, "http://1.2.3.4:80", "randompath")
+			if !status {
+				t.Errorf("Non-existent URL seems to exist")
+			}
+		})
+		//t.Run("List=1", func(t *testing.T) { listHTTPFiles(t, "http://192.168.0.147:80") })
+		dirpath := "listfiles"
+		filenames := []string{"file1", "file2", "file3"}
+		for _, filename := range filenames {
+			fullFile := filepath.Join(tempDir, dirpath, filename)
+			if _, _, err := createRandomFile(fullFile, 1024*1); err != nil {
+				t.Fatalf("unable to create random file %s: %v", fullFile, err)
+			}
 		}
+		t.Run("valid", func(t *testing.T) {
+			status, msg := listHTTPFiles(t, ts.URL, dirpath)
+			if status {
+				t.Errorf("%v", msg)
+			}
+		})
 	})
-	//t.Run("Delete=0", func(t *testing.T) { operationHTTP(t, "", "httpteststuff", zedUpload.SyncOpDelete) })
-	//t.Run("Delete=1", func(t *testing.T) { operationHTTP(t, "", "release/httpteststuff", zedUpload.SyncOpDelete) })
-	//t.Run("Delete=2", func(t *testing.T) { operationHTTP(t, "", "release/1.0/httpteststuff", zedUpload.SyncOpDelete) })
+	t.Run("Delete", func(t *testing.T) {
+		//t.Run("Delete=0", func(t *testing.T) { operationHTTP(t, "", "httpteststuff", zedUpload.SyncOpDelete) })
+		//t.Run("Delete=1", func(t *testing.T) { operationHTTP(t, "", "release/httpteststuff", zedUpload.SyncOpDelete) })
+		//t.Run("Delete=2", func(t *testing.T) { operationHTTP(t, "", "release/1.0/httpteststuff", zedUpload.SyncOpDelete) })
+	})
 }
 
 func testHTTPDatastoreFunctional(t *testing.T) {
@@ -236,14 +325,14 @@ func testHTTPDatastoreFunctional(t *testing.T) {
 		t.Skip("skipping HTTP Extended test suite.")
 	} else {
 		t.Log("Running HTTP Extended test suite.")
-		t.Run("XtraSmall=0", func(t *testing.T) {
-			err := testHTTPObjectWithFile(t, filepath.Join(httpDownloadDir, "file1"), "minimal/releases/bionic/release-20210803/ubuntu-18.04-minimal-cloudimg-amd64-lxd.tar.xz", httpURL, "")
+		t.Run("XtraSmall", func(t *testing.T) {
+			err := testHTTPObjectWithFile(t, filepath.Join(httpDownloadDir, "file1"), 1024*1)
 			if err != nil {
 				t.Errorf("%v", err)
 			}
 		})
-		t.Run("Small=0", func(t *testing.T) {
-			err := testHTTPObjectWithFile(t, filepath.Join(httpDownloadDir, "file2"), "minimal/releases/bionic/release-20210803/ubuntu-18.04-minimal-cloudimg-amd64-root.tar.xz", httpURL, "")
+		t.Run("Small", func(t *testing.T) {
+			err := testHTTPObjectWithFile(t, filepath.Join(httpDownloadDir, "file2"), 1024*1024*1)
 			if err != nil {
 				t.Errorf("%v", err)
 			}
@@ -251,21 +340,76 @@ func testHTTPDatastoreFunctional(t *testing.T) {
 	}
 }
 
+// testHTTPObjectWithFile get a remote object's metadata, then download it, and compare the sizes
+func testHTTPObjectWithFile(t *testing.T, localPath string, size int) error {
+	tempDir := t.TempDir()
+	r := mux.NewRouter()
+	r.Methods("GET").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(tempDir, r.URL.Path))
+	})
+	r.Methods("HEAD").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		filename := filepath.Join(tempDir, r.URL.Path)
+		stat, err := os.Stat(filename)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+	})
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	// just create a random download file
+	filename := "file1"
+	infile := filepath.Join(tempDir, filename)
+	if _, _, err := createRandomFile(infile, size); err != nil {
+		return fmt.Errorf("unable to create random file %s: %v", infile, err)
+	}
+	defer os.Remove(infile)
+	status, msg := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", filename, localPath, false)
+	if status {
+		return fmt.Errorf("%v", msg)
+	}
+	statusMeta, msgMeta, remoteSize := getHTTPObjectMetaData(t, localPath, filename, ts.URL, "")
+	if statusMeta {
+		return fmt.Errorf(msgMeta)
+	}
+	statusDownload, msgDownload := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", filename, localPath, false)
+	if statusDownload {
+		return fmt.Errorf(msgDownload)
+	}
+	stat, err := os.Stat(localPath)
+	if err != nil {
+		return err
+	}
+	localSize := stat.Size()
+	if remoteSize != localSize {
+		return fmt.Errorf("Downloaded size %v didn't match metadata remote size %v", localSize, remoteSize)
+	}
+	return nil
+
+}
+
 func testHTTPDatastoreNegative(t *testing.T) {
-	t.Run("InvalidTransport=0", func(t *testing.T) {
-		status, _ := operationHTTP(t, httpUploadFile, "httpteststuff", httpPostRegion, "", zedUpload.SyncOpUnknown, false)
+	// create the test server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+	t.Run("InvalidTransport", func(t *testing.T) {
+		status, _ := operationHTTP(t, zedUpload.SyncOpUnknown, ts.URL, "", "httpteststuff", httpUploadFile, false)
 		if !status {
 			t.Errorf("Processing invalid transporter")
 		}
 	})
-	t.Run("InvalidUpload=0", func(t *testing.T) {
-		status, _ := operationHTTP(t, uploadDir+"InvalidFile", "httpteststuff", httpPostRegion, "", zedUpload.SyncOpUpload, false)
+	t.Run("InvalidUpload", func(t *testing.T) {
+		status, _ := operationHTTP(t, zedUpload.SyncOpUpload, ts.URL, "", "httpteststuff", uploadDir+"InvalidFile", false)
 		if !status {
 			t.Errorf("Uploading non existent file")
 		}
 	})
-	t.Run("InvalidDownload=0", func(t *testing.T) {
-		status, _ := operationHTTP(t, filepath.Join(httpDownloadDir, "file0"), "InvalidFile", httpURL, httpDir, zedUpload.SyncOpDownload, false)
+	t.Run("InvalidDownload", func(t *testing.T) {
+		status, _ := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", "InvalidFile", filepath.Join(httpDownloadDir, "file0"), false)
 		if !status {
 			t.Errorf("Downloading non existent file")
 		}
@@ -301,61 +445,31 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 
 		// make a random file
 		infile := httpDownloadDir + "input"
-		if _, err := os.Stat(infile); err == nil {
-			if err := os.Remove(infile); err != nil {
-				t.Fatalf("unable to remove existing file %s %v", infile, err)
-			}
-		}
-		f, err := os.Create(infile)
+		inSize, inHash, err := createRandomFile(infile, 1024*1024*100)
 		if err != nil {
-			t.Fatalf("unable to create file %s %v", infile, err)
+			t.Fatalf("unable to create random file %v", err)
 		}
-		defer f.Close()
 		defer os.RemoveAll(infile)
-		size := 1024 * 1024 * 100
-		bufSize := 1024 * 1024
-		randReader := io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), int64(size))
-		for {
-			buf := make([]byte, bufSize)
-			_, err := randReader.Read(buf)
-			if err != nil && err != io.EOF {
-				t.Fatalf("unable to read from random reader %v", err)
-			}
-			if _, err := f.Write(buf); err != nil {
-				t.Fatalf("unable to write to file %s %v", infile, err)
-			}
-			if err == io.EOF {
-				break
-			}
-		}
-		if _, err := f.Seek(0, 0); err != nil {
-			t.Fatalf("unable to seek to beginning of file %s %v", infile, err)
-		}
-		// get the final file size
-		stat, err := os.Stat(infile)
-		if err != nil {
-			t.Fatalf("unable to stat file %s %v", infile, err)
-		}
-		inSize := stat.Size()
-
-		inHash, err := sha256File(infile)
-		if err != nil {
-			t.Fatalf("unable to hash input file %v", err)
-		}
 
 		// create the test server
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.ServeContent(w, r, "input", time.Now(), newUnstableFileReader(f, uint64(size/2), unstableDelay, 100, t.Logf))
+			f, err := os.Open(infile)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			defer f.Close()
+			http.ServeContent(w, r, "input", time.Now(), newUnstableFileReader(f, uint64(inSize/2), unstableDelay, 100, t.Logf))
 		}))
 		defer ts.Close()
 
 		outfile := filepath.Join(httpDownloadDir, "repeat2")
-		status, msg := operationHTTP(t, outfile, "path/does/not/matter/with/fixed/server", ts.URL, "", zedUpload.SyncOpDownload, true, zedUpload.WithHTTPInactivityTimeout(inactivityTimeout))
+		status, msg := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", "path/does/not/matter/with/fixed/server", outfile, true, zedUpload.WithHTTPInactivityTimeout(inactivityTimeout))
 		if status {
 			t.Errorf("%v", msg)
 		}
 		// get the number of bytes transferred
-		stat, err = os.Stat(outfile)
+		stat, err := os.Stat(outfile)
 		if err != nil {
 			t.Fatalf("unable to stat file %s %v", outfile, err)
 		}
@@ -386,4 +500,42 @@ func sha256File(filePath string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// createRandomFile creates a file of the given size at the given path, and returns the actual size of the file,
+// string of the file hash, and error. Will create all parent directories, if required
+func createRandomFile(p string, size int) (int64, string, error) {
+	// create the parent directories
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return 0, "", fmt.Errorf("unable to create parent directories for %s %v", p, err)
+	}
+	if _, err := os.Stat(p); err == nil {
+		if err := os.Remove(p); err != nil {
+			return 0, "", fmt.Errorf("unable to remove existing file %s %v", p, err)
+		}
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		return 0, "", fmt.Errorf("unable to create file %s %v", p, err)
+	}
+	defer f.Close()
+	randReader := io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), int64(size))
+	if _, err := io.Copy(f, randReader); err != nil {
+		return 0, "", fmt.Errorf("unable to copy random data to file %s %v", p, err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return 0, "", fmt.Errorf("unable to seek to beginning of file %s %v", p, err)
+	}
+	// get the final file size
+	stat, err := os.Stat(p)
+	if err != nil {
+		return 0, "", fmt.Errorf("unable to stat file %s %v", p, err)
+	}
+	actualSize := stat.Size()
+
+	hash, err := sha256File(p)
+	if err != nil {
+		return 0, "", fmt.Errorf("unable to hash file %s: %v", p, err)
+	}
+	return actualSize, hash, nil
 }

@@ -34,8 +34,8 @@ require (
 	github.com/Azure/azure-pipeline-go v0.2.3
 	github.com/Azure/azure-storage-blob-go v0.15.0
 	github.com/aws/aws-sdk-go v1.35.35
+	github.com/go-chi/chi/v5 v5.0.10
 	github.com/google/go-containerregistry v0.6.0
-	github.com/gorilla/mux v1.7.3
 	github.com/pkg/sftp v1.12.0
 	golang.org/x/crypto v0.1.0
 	golang.org/x/oauth2 v0.4.0

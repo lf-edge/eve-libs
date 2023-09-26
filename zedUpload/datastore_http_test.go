@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/lf-edge/eve-libs/zedUpload"
 )
 
@@ -182,8 +182,8 @@ func testHTTPDatastoreAPI(t *testing.T) {
 	// - any POST gets written to tempDir; the test should check the file
 	// - any GET gets checked in the local filesystem; the test should create the file. If it is a directory, it lists the file names
 	tempDir := t.TempDir()
-	r := mux.NewRouter()
-	r.Methods("POST").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	r := chi.NewRouter()
+	r.Post("/*", func(w http.ResponseWriter, r *http.Request) {
 		dir := filepath.Join(tempDir, r.URL.Path)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -214,7 +214,7 @@ func testHTTPDatastoreAPI(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	})
-	r.Methods("GET").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		p := filepath.Join(tempDir, r.URL.Path)
 		// not found? return 404
 		if _, err := os.Stat(p); err != nil {
@@ -343,11 +343,11 @@ func testHTTPDatastoreFunctional(t *testing.T) {
 // testHTTPObjectWithFile get a remote object's metadata, then download it, and compare the sizes
 func testHTTPObjectWithFile(t *testing.T, localPath string, size int) error {
 	tempDir := t.TempDir()
-	r := mux.NewRouter()
-	r.Methods("GET").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	r := chi.NewRouter()
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(tempDir, r.URL.Path))
 	})
-	r.Methods("HEAD").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	r.Head("/*", func(w http.ResponseWriter, r *http.Request) {
 		filename := filepath.Join(tempDir, r.URL.Path)
 		stat, err := os.Stat(filename)
 		if err != nil {

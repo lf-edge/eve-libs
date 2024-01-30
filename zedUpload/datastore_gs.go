@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/lf-edge/eve-libs/nettrace"
@@ -109,10 +110,13 @@ func (ep *GsTransportMethod) processGSUpload(req *DronaRequest) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -150,10 +154,13 @@ func (ep *GsTransportMethod) processGSDownload(req *DronaRequest) (int, error) {
 		}
 	}
 
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 
 	err = s.DownloadFile(req.objloc, ep.bucket, req.name, req.sizelimit, prgChan)
@@ -193,10 +200,13 @@ func (ep *GsTransportMethod) processGSList(req *DronaRequest) ([]string, int, er
 	var csize int
 	var s []string
 
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lf-edge/eve-libs/nettrace"
@@ -131,10 +132,13 @@ func (ep *OCITransportMethod) processDownload(req *DronaRequest) (int64, string,
 	if ep.registry == "" {
 		return size, "", fmt.Errorf("cannot download from blank registry")
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -155,10 +159,13 @@ func (ep *OCITransportMethod) processDelete(req *DronaRequest) error {
 
 // processList list tags for a given image in OCI registry
 func (ep *OCITransportMethod) processList(req *DronaRequest) ([]string, error) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -178,10 +185,13 @@ func (ep *OCITransportMethod) processObjectMetaData(req *DronaRequest) (string, 
 	if ep.registry == "" {
 		return imageSha256, size, fmt.Errorf("cannot download from blank registry")
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {

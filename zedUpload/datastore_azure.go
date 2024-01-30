@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
 
 	"time"
 
@@ -127,10 +128,13 @@ func (ep *AzureTransportMethod) processAzureDownload(req *DronaRequest) error {
 		return err
 	}
 	file := req.name
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	doneParts, err := azure.DownloadAzureBlob(ep.aurl, ep.acName, ep.acKey, ep.container,
 		file, req.objloc, req.sizelimit, hClient, req.doneParts, prgChan)

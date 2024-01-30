@@ -279,7 +279,9 @@ func reqPostSize(req *DronaRequest, dronaCtx *DronaCtx, stats types.UpdateStats)
 	dronaCtx.postSize(req, stats.Size, stats.Asize)
 }
 
-func statsUpdater(req *DronaRequest, dronaCtx *DronaCtx, prgNotif types.StatsNotifChan) {
+func statsUpdater(wg *sync.WaitGroup, req *DronaRequest, dronaCtx *DronaCtx,
+	prgNotif types.StatsNotifChan) {
+	defer wg.Done()
 	ticker := time.NewTicker(StatsUpdateTicker)
 	defer ticker.Stop()
 	var newStats, stats types.UpdateStats

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/lf-edge/eve-libs/nettrace"
@@ -111,10 +112,13 @@ func (ep *HttpTransportMethod) GetNetTrace(description string) (
 // File upload to HTTP Datastore
 func (ep *HttpTransportMethod) processHttpUpload(req *DronaRequest) (error, int) {
 	postUrl := ep.hurl + "/" + ep.path
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -131,10 +135,13 @@ func (ep *HttpTransportMethod) processHttpDownload(req *DronaRequest) (error, in
 	if ep.hurl != "" {
 		file = ep.hurl + "/" + ep.path + "/" + req.name
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -153,10 +160,13 @@ func (ep *HttpTransportMethod) processHttpDelete(req *DronaRequest) error {
 // File list from HTTP Datastore
 func (ep *HttpTransportMethod) processHttpList(req *DronaRequest) ([]string, error) {
 	listUrl := ep.hurl + "/" + ep.path
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -173,10 +183,13 @@ func (ep *HttpTransportMethod) processHttpObjectMetaData(req *DronaRequest) (err
 	if ep.hurl != "" {
 		file = ep.hurl + "/" + ep.path + "/" + req.name
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {

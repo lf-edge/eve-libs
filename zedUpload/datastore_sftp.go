@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lf-edge/eve-libs/nettrace"
@@ -129,10 +130,13 @@ func (ep *SftpTransportMethod) processSftpUpload(req *DronaRequest) (error, int)
 			file = ep.path + "/" + req.name
 		}
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 
 	stats, _ := sftp.ExecCmd("put", ep.surl, ep.uname, ep.passwd, file, req.objloc, req.sizelimit, prgChan)
@@ -149,10 +153,13 @@ func (ep *SftpTransportMethod) processSftpDownload(req *DronaRequest) (error, in
 			file = ep.path + "/" + req.name
 		}
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 
 	stats, _ := sftp.ExecCmd("fetch", ep.surl, ep.uname, ep.passwd, file, req.objloc, req.sizelimit, prgChan)
@@ -175,10 +182,13 @@ func (ep *SftpTransportMethod) processSftpDelete(req *DronaRequest) error {
 
 // File list from SFTP Datastore
 func (ep *SftpTransportMethod) processSftpList(req *DronaRequest) ([]string, error) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 
 	stats, resp := sftp.ExecCmd("ls", ep.surl, ep.uname, ep.passwd, ep.path, "", req.sizelimit, prgChan)

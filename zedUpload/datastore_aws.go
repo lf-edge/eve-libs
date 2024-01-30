@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lf-edge/eve-libs/nettrace"
@@ -115,10 +116,13 @@ func (ep *AwsTransportMethod) processS3Upload(req *DronaRequest) (error, int) {
 	if err != nil {
 		return err, 0
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 	hClient, err := ep.hClientWrap.unwrap()
 	if err != nil {
@@ -150,6 +154,8 @@ func (ep *AwsTransportMethod) processS3Upload(req *DronaRequest) (error, int) {
 func (ep *AwsTransportMethod) processS3Download(req *DronaRequest) (error, int) {
 	var csize int
 	pwd := strings.TrimSuffix(ep.apiKey, "\n")
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	hClient, err := ep.hClientWrap.unwrap()
@@ -171,7 +177,8 @@ func (ep *AwsTransportMethod) processS3Download(req *DronaRequest) (error, int) 
 				ep.ctx.postSize(req, length, 0)
 			}
 		}
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 
 	sc := zedAWS.NewAwsCtx(ep.token, pwd, ep.region, hClient)
@@ -260,11 +267,13 @@ func (ep *AwsTransportMethod) processS3List(req *DronaRequest) ([]string, error,
 	var csize int
 	var s []string
 	pwd := strings.TrimSuffix(ep.apiKey, "\n")
-
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	prgChan := make(types.StatsNotifChan)
 	defer close(prgChan)
 	if req.ackback {
-		go statsUpdater(req, ep.ctx, prgChan)
+		wg.Add(1)
+		go statsUpdater(&wg, req, ep.ctx, prgChan)
 	}
 
 	hClient, err := ep.hClientWrap.unwrap()

@@ -12,8 +12,8 @@ require (
 	github.com/packetcap/go-pcap v0.0.0-20230717110547-c34843f9206d
 	github.com/sirupsen/logrus v1.9.0
 	github.com/ti-mo/conntrack v0.4.0
-	golang.org/x/net v0.17.0
-	golang.org/x/sys v0.15.0
+	golang.org/x/net v0.23.0
+	golang.org/x/sys v0.18.0
 )
 
 require (
@@ -37,7 +37,7 @@ require (
 	github.com/go-chi/chi/v5 v5.0.10
 	github.com/google/go-containerregistry v0.6.0
 	github.com/pkg/sftp v1.12.0
-	golang.org/x/crypto v0.17.0
+	golang.org/x/crypto v0.21.0
 	golang.org/x/oauth2 v0.7.0
 	google.golang.org/api v0.114.0
 )

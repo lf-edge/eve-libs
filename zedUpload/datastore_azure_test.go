@@ -1,6 +1,7 @@
 package zedUpload_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -169,11 +170,11 @@ func getAzureBlobMetaData(t *testing.T, objloc string, objkey string) (bool, str
 func testAzureBlobWithFile(t *testing.T, objloc string, objkey string) error {
 	statusUpload, msgUpload := operationAzureBlob(t, objloc, objkey, zedUpload.SyncOpUpload)
 	if statusUpload {
-		return fmt.Errorf(msgUpload)
+		return errors.New(msgUpload)
 	}
 	statusMeta, msgMeta, size, remoteFileMD5 := getAzureBlobMetaData(t, objloc, objkey)
 	if statusMeta {
-		return fmt.Errorf(msgMeta)
+		return errors.New(msgMeta)
 	}
 	stat, err := os.Stat(objloc)
 	if err == nil {
@@ -192,7 +193,7 @@ func testAzureBlobWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDownload, msgDownload := operationAzureBlob(t, azureDownloadDir+objkey, objkey, zedUpload.SyncOpDownload)
 	if statusDownload {
-		return fmt.Errorf(msgDownload)
+		return errors.New(msgDownload)
 	}
 	downloadFileMD5, err := hashFileMd5(azureDownloadDir + objkey)
 	if err != nil {
@@ -203,7 +204,7 @@ func testAzureBlobWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDelete, msgDelete := operationAzureBlob(t, objloc, objkey, zedUpload.SyncOpDelete)
 	if statusDelete {
-		return fmt.Errorf(msgDelete)
+		return errors.New(msgDelete)
 	}
 	return nil
 

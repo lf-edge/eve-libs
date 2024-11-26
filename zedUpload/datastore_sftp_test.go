@@ -1,6 +1,7 @@
 package zedUpload_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -171,11 +172,11 @@ func getSFTPObjectMetaData(t *testing.T, objloc string, objkey string) (bool, st
 func testSFTPObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	statusUpload, msgUpload := operationSFTP(t, objloc, objkey, zedUpload.SyncOpUpload)
 	if statusUpload {
-		return fmt.Errorf(msgUpload)
+		return errors.New(msgUpload)
 	}
 	statusMeta, msgMeta, size := getSFTPObjectMetaData(t, objloc, objkey)
 	if statusMeta {
-		return fmt.Errorf(msgMeta)
+		return errors.New(msgMeta)
 	}
 	stat, err := os.Stat(objloc)
 	if err == nil {
@@ -187,7 +188,7 @@ func testSFTPObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDownload, msgDownload := operationSFTP(t, sftpDownloadDir+objkey, objkey, zedUpload.SyncOpDownload)
 	if statusDownload {
-		return fmt.Errorf(msgDownload)
+		return errors.New(msgDownload)
 	}
 	downloadFileStat, err := os.Stat(sftpDownloadDir + objkey)
 	if err == nil {
@@ -199,7 +200,7 @@ func testSFTPObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDelete, msgDelete := operationSFTP(t, objloc, objkey, zedUpload.SyncOpDelete)
 	if statusDelete {
-		return fmt.Errorf(msgDelete)
+		return errors.New(msgDelete)
 	}
 	return nil
 }

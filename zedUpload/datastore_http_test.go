@@ -3,6 +3,7 @@ package zedUpload_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -372,11 +373,11 @@ func testHTTPObjectWithFile(t *testing.T, localPath string, size int) error {
 	}
 	statusMeta, msgMeta, remoteSize := getHTTPObjectMetaData(t, localPath, filename, ts.URL, "")
 	if statusMeta {
-		return fmt.Errorf(msgMeta)
+		return errors.New(msgMeta)
 	}
 	statusDownload, msgDownload := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", filename, localPath, false)
 	if statusDownload {
-		return fmt.Errorf(msgDownload)
+		return errors.New(msgDownload)
 	}
 	stat, err := os.Stat(localPath)
 	if err != nil {

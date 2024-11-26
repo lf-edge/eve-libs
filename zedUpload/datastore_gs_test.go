@@ -1,6 +1,7 @@
 package zedUpload_test
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -192,11 +193,11 @@ func getGSObjectMetaData(t *testing.T, objloc string, objkey string) (bool, stri
 func testGSObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	statusUpload, msgUpload := operationGS(t, objloc, objkey, zedUpload.SyncOpUpload)
 	if statusUpload {
-		return fmt.Errorf(msgUpload)
+		return errors.New(msgUpload)
 	}
 	statusMeta, msgMeta, size, remoteFileMD5 := getGSObjectMetaData(t, objloc, objkey)
 	if statusMeta {
-		return fmt.Errorf(msgMeta)
+		return errors.New(msgMeta)
 	}
 	stat, err := os.Stat(objloc)
 	if err == nil {
@@ -215,7 +216,7 @@ func testGSObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDownload, msgDownload := operationGS(t, gsDownloadDir+objkey, objkey, zedUpload.SyncOpDownload)
 	if statusDownload {
-		return fmt.Errorf(msgDownload)
+		return errors.New(msgDownload)
 	}
 	downloadFileMD5, err := calculateMd5(gsDownloadDir+objkey, 5242880)
 	if err != nil {
@@ -226,7 +227,7 @@ func testGSObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDelete, msgDelete := operationGS(t, objloc, objkey, zedUpload.SyncOpDelete)
 	if statusDelete {
-		return fmt.Errorf(msgDelete)
+		return errors.New(msgDelete)
 	}
 	return nil
 

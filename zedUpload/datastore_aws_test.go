@@ -1,6 +1,7 @@
 package zedUpload_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -190,11 +191,11 @@ func getAwsS3ObjectMetaData(t *testing.T, objloc string, objkey string) (bool, s
 func testAwsS3ObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	statusUpload, msgUpload := operationAwsS3(t, objloc, objkey, zedUpload.SyncOpUpload)
 	if statusUpload {
-		return fmt.Errorf(msgUpload)
+		return errors.New(msgUpload)
 	}
 	statusMeta, msgMeta, size, remoteFileMD5 := getAwsS3ObjectMetaData(t, objloc, objkey)
 	if statusMeta {
-		return fmt.Errorf(msgMeta)
+		return errors.New(msgMeta)
 	}
 	stat, err := os.Stat(objloc)
 	if err == nil {
@@ -213,7 +214,7 @@ func testAwsS3ObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDownload, msgDownload := operationAwsS3(t, awsDownloadDir+objkey, objkey, zedUpload.SyncOpDownload)
 	if statusDownload {
-		return fmt.Errorf(msgDownload)
+		return errors.New(msgDownload)
 	}
 	downloadFileMD5, err := calculateMd5(awsDownloadDir+objkey, 5242880)
 	if err != nil {
@@ -224,7 +225,7 @@ func testAwsS3ObjectWithFile(t *testing.T, objloc string, objkey string) error {
 	}
 	statusDelete, msgDelete := operationAwsS3(t, objloc, objkey, zedUpload.SyncOpDelete)
 	if statusDelete {
-		return fmt.Errorf(msgDelete)
+		return errors.New(msgDelete)
 	}
 	return nil
 

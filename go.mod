@@ -1,6 +1,6 @@
 module github.com/lf-edge/eve-libs
 
-go 1.20
+go 1.23.0
 
 require github.com/onsi/gomega v1.24.2
 

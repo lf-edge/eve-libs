@@ -312,7 +312,20 @@ func DownloadAzureBlob(accountURL, accountName, accountKey, containerName, remot
 			if err != nil {
 				return err
 			}
-			body := dr.Body(azblob.RetryReaderOptions{MaxRetryRequests: maxRetries})
+			var retryErrorStr []string
+			body := dr.Body(azblob.RetryReaderOptions{
+				MaxRetryRequests: maxRetries,
+				NotifyFailedRead: func(failureCount int, lastError error, offset int64, count int64, willRetry bool) {
+					retryError := fmt.Errorf("total read failures: %d, offset: %d, error: %v", failureCount, offset, lastError)
+					retryErrorStr = append(retryErrorStr, retryError.Error())
+					if !willRetry {
+						err = fmt.Errorf(strings.Join(retryErrorStr, "\n"))
+					}
+				},
+			})
+			if err != nil {
+				return err
+			}
 			rangeProgress := int64(0)
 			body = pipeline.NewResponseBodyProgress(
 				body,

@@ -43,4 +43,4 @@ jobs:
       - name: test
         # build binaries and run them to test; sufficient to run on native arch
         if: matrix.target.arch == 'amd64' && matrix.target.os == 'linux'
-        run: go test ./... -race
+        run: go test ./... -v -race

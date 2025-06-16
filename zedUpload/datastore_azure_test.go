@@ -28,6 +28,9 @@ func TestAzureBlobDatastore(t *testing.T) {
 	if err := os.MkdirAll(azureDownloadDir, 0755); err != nil {
 		t.Fatalf("unable to make download directory: %v", err)
 	}
+	if err := os.MkdirAll(nettraceFolder, 0755); err != nil {
+		t.Fatalf("unable to make nettrace log directory: %v", err)
+	}
 	if azureContainer != "" && azureAccountName != "" && azureAccountKey != "" {
 		t.Run("API", testAzureBlobDatastoreAPI)
 		t.Run("Negative", testAzureBlobDatastoreNegative)
@@ -45,7 +48,7 @@ func operationAzureBlob(t *testing.T, objloc string, objkey string, operation ze
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, azureContainer, azureAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, nettraceFolder, azureContainer, azureAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(operation, objkey, objloc, 0, true, respChan)
@@ -78,7 +81,7 @@ func operationAzureBlobNegative(t *testing.T, azureName string, azureKey string,
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, azureContainer, azureAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, nettraceFolder, azureContainer, azureAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(operation, "azureteststuff", azureUploadFile, 0, true, respChan)
@@ -111,7 +114,7 @@ func listAzureBlobFiles(t *testing.T, container string) (bool, string) {
 
 	azureAuth := &zedUpload.AuthInput{AuthType: "s3", Uname: azureAccountName, Password: azureAccountKey}
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, container, azureAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, nettraceFolder, azureContainer, azureAuth)
 
 	if err == nil && dEndPoint != nil {
 
@@ -143,7 +146,7 @@ func getAzureBlobMetaData(t *testing.T, objloc string, objkey string) (bool, str
 		return true, err.Error(), 0, ""
 	}
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, azureContainer, azureAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncAzureTr, awsRegion, nettraceFolder, azureContainer, azureAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(zedUpload.SyncOpGetObjectMetaData, objkey, objloc, 0, true, respChan)

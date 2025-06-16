@@ -4,22 +4,247 @@
 package nettrace_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/google/uuid"
 	"github.com/lf-edge/eve-libs/nettrace"
+	nt "github.com/lf-edge/eve-libs/nettrace"
+	st "github.com/lf-edge/eve-libs/nettraceStorage"
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
+	"go.etcd.io/bbolt"
 )
+
+// Return number of Objects in BBolt DB.
+func countBucketRO(t *testing.T, dbPath, bucket string) int {
+	t.Helper()
+	db, err := bbolt.Open(dbPath, 0o600, &bbolt.Options{
+		ReadOnly: true,
+		Timeout:  3 * time.Second,
+	})
+	if err != nil {
+		t.Errorf("open %s: %v", dbPath, err)
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error { n++; return nil })
+	}); err != nil {
+		t.Errorf("view %s: %v", bucket, err)
+	}
+	return n
+}
+
+// Offload to Bbolt and verify that at least some items were persisted.
+func TestHTTPTracing_OffloadToBolt(t *testing.T) {
+	// Local HTTP server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test", "ok")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Per-test Bolt sink
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "nettrace.db")
+	sink, err := st.NewBoltBatchSink(dbPath)
+	if err != nil {
+		t.Errorf("NewBoltBatchSink: %v", err)
+	}
+
+	// Signal when the FIRST batch arrives
+	var once sync.Once
+	done := make(chan struct{}, 1)
+	wrapped := func(b nt.BatchSnapshot) {
+		sink.HandleBatch(b)
+		once.Do(func() { done <- struct{}{} })
+	}
+
+	// Traced client with offload enabled
+	sessionUUID := uuid.New().String()
+	client, err := nt.NewHTTPClient(
+		nt.HTTPClientCfg{
+			ReqTimeout:       5 * time.Second,
+			DisableKeepAlive: false,
+			PreferHTTP2:      true,
+		},
+		sessionUUID,
+		&nt.WithHTTPReqTrace{},
+		&nt.WithBatchOffload{
+			Callback:          wrapped,
+			Threshold:         1,    // emit quickly for the test
+			FinalFlushOnClose: true, // still flush leftovers on Close()
+		},
+	)
+	if err != nil {
+		t.Errorf("NewHTTPClient: %v", err)
+	}
+
+	// Drive ONE request
+	resp, err := client.Client.Get(srv.URL)
+	if err != nil {
+		t.Errorf("GET: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	// Wait for offload callback BEFORE closing the client
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Errorf("timeout waiting for offload callback to complete")
+	}
+
+	// Close the sink to release the Bolt writer lock
+	if err := sink.Close(); err != nil {
+		t.Errorf("sink.Close: %v", err)
+	}
+
+	// Now we can open the DB read-only and count
+	if n := countBucketRO(t, dbPath, "httpReqs"); n == 0 {
+		t.Errorf("expected >=1 httpReqs, got %d", n)
+	}
+	if n := countBucketRO(t, dbPath, "dials"); n == 0 {
+		t.Errorf("expected >=1 dials, got %d", n)
+	}
+}
+
+// Offload to Bbolt, then export a consolidated JSON using the meta from GetTrace.
+func TestHTTPTracing_OffloadToBolt_ExportJSON(t *testing.T) {
+	// Local HTTP server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test", "ok")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Per-test Bolt sink
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "nettrace.db")
+	sink, err := st.NewBoltBatchSink(dbPath)
+	if err != nil {
+		t.Errorf("NewBoltBatchSink: %v", err)
+	}
+	defer func() { _ = sink.Close() }()
+
+	var once sync.Once
+	done := make(chan struct{}, 1)
+	wrapped := func(b nt.BatchSnapshot) {
+		sink.HandleBatch(b)
+		once.Do(func() { done <- struct{}{} })
+	}
+
+	sessionUUID := uuid.New().String()
+	client, err := nt.NewHTTPClient(
+		nt.HTTPClientCfg{
+			ReqTimeout:       5 * time.Second,
+			DisableKeepAlive: false,
+			PreferHTTP2:      true,
+		},
+		sessionUUID,
+		&nt.WithHTTPReqTrace{},
+		&nt.WithBatchOffload{
+			Callback:          wrapped,
+			Threshold:         1,
+			FinalFlushOnClose: true,
+		},
+	)
+	if err != nil {
+		t.Errorf("NewHTTPClient: %v", err)
+	}
+
+	// Drive a request
+	resp, err := client.Client.Get(srv.URL)
+	if err != nil {
+		t.Errorf("GET: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	httpTrace, _, err := client.GetTrace("example offload session")
+	if err != nil {
+		t.Errorf("GetTrace: %v", err)
+	}
+
+	// Wait for the callback to run at least once
+	select {
+	case <-done:
+		// proceed
+	case <-time.After(3 * time.Second):
+		t.Errorf("timeout waiting for offload callback to complete")
+	}
+
+	// Export a single consolidated JSON from everything in Bolt
+	jsonPath := filepath.Join(tmp, "nettrace.json")
+	if err := sink.ExportToJSON(jsonPath, httpTrace.NetTrace); err != nil {
+		t.Errorf("ExportToJSON: %v", err)
+	}
+
+	// Ensure the file exists and is non-empty
+	fi, err := os.Stat(jsonPath)
+	if err != nil {
+		t.Errorf("stat json: %v", err)
+	}
+	if fi.Size() == 0 {
+		t.Errorf("expected non-empty JSON, got 0 bytes")
+	}
+
+	// Read back the JSON and sanity-check a few fields
+	f, err := os.Open(jsonPath)
+	if err != nil {
+		t.Errorf("open json: %v", err)
+	}
+	defer f.Close()
+
+	var payload struct {
+		Description  string              `json:"description"`
+		Dials        []nt.DialTrace      `json:"dials"`
+		HTTPRequests []nt.HTTPReqTrace   `json:"httpRequests"`
+		TCPConns     []nt.TCPConnTrace   `json:"tcpConns"`
+		UDPConns     []nt.UDPConnTrace   `json:"udpConns"`
+		DNSQueries   []nt.DNSQueryTrace  `json:"dnsQueries"`
+		TLSTunnels   []nt.TLSTunnelTrace `json:"tlsTunnels"`
+	}
+	if err := json.NewDecoder(f).Decode(&payload); err != nil {
+		t.Errorf("decode json: %v", err)
+	}
+
+	// Basic assertions
+	if payload.Description != "example offload session" {
+		t.Errorf("unexpected description: %q", payload.Description)
+	}
+	if len(payload.HTTPRequests) == 0 {
+		t.Errorf("expected >=1 httpRequests, got 0")
+	}
+	if len(payload.Dials) == 0 {
+		t.Errorf("expected >=1 dials, got 0")
+	}
+	// Optional: ensure at least one of the other sections has content
+	if len(payload.TCPConns)+len(payload.UDPConns)+len(payload.DNSQueries)+len(payload.TLSTunnels) == 0 {
+		t.Errorf("expected some connection/tunnel/dns content, got none")
+	}
+}
 
 func relTimeIsInBetween(t *GomegaWithT, timestamp, lowerBound, upperBound nettrace.Timestamp) {
 	t.Expect(timestamp.IsRel).To(BeTrue())
@@ -123,11 +348,13 @@ func TestHTTPTracing(test *testing.T) {
 			Interfaces: []string{defaultLink.Attrs().Name},
 		})
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
 		ReqTimeout:       5 * time.Second,
 		DisableKeepAlive: true,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://www.example.com", nil)
@@ -385,10 +612,12 @@ func TestTLSCertErrors(test *testing.T) {
 	opts := []nettrace.TraceOpt{
 		&nettrace.WithHTTPReqTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2: true,
 		ReqTimeout:  5 * time.Second,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	// Expired certificate
@@ -473,9 +702,11 @@ func TestNonExistentHost(test *testing.T) {
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		ReqTimeout: 5 * time.Second,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://non-existent-host.com", nil)
@@ -596,9 +827,11 @@ func TestUnresponsiveDest(test *testing.T) {
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		ReqTimeout: 5 * time.Second,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://198.51.100.100", nil)
@@ -690,9 +923,11 @@ func TestReusedTCPConn(test *testing.T) {
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		DisableKeepAlive: false, // allow TCP conn to be reused between HTTP requests
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	// First GET request
@@ -812,11 +1047,13 @@ func TestAllNameserversSkipped(test *testing.T) {
 		&nettrace.WithHTTPReqTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		SkipNameserver: func(ipAddr net.IP, port uint16) (skip bool, reason string) {
 			return true, "skipping any configured nameserver"
 		},
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://www.example.com", nil)
@@ -906,12 +1143,14 @@ func TestWithSourceIP(test *testing.T) {
 	}
 	sourceIP := getSourceIPForDefaultRoute(test)
 	fmt.Println(sourceIP)
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
 		ReqTimeout:       5 * time.Second,
 		DisableKeepAlive: true,
 		SourceIP:         sourceIP,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://www.example.com", nil)

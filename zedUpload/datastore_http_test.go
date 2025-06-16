@@ -37,6 +37,9 @@ func TestHTTPDatastore(t *testing.T) {
 	if err := os.MkdirAll(httpDownloadDir, 0755); err != nil {
 		t.Fatalf("unable to make download directory: %v", err)
 	}
+	if err := os.MkdirAll(nettraceFolder, 0755); err != nil {
+		t.Fatalf("unable to make nettrace log directory: %v", err)
+	}
 	t.Run("API", testHTTPDatastoreAPI)
 	t.Run("Negative", testHTTPDatastoreNegative)
 	t.Run("Functional", testHTTPDatastoreFunctional)
@@ -62,7 +65,7 @@ func operationHTTP(l logger, operation zedUpload.SyncOpType, url, remoteDir, rem
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, remoteDir, httpAuth, syncerOpts...)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, nettraceFolder, remoteDir, httpAuth, syncerOpts...)
 	if err == nil && dEndPoint != nil {
 		if local {
 			var lIP net.IP
@@ -119,7 +122,7 @@ func listHTTPFiles(t *testing.T, url, dir string) (bool, string) {
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, dir, httpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, nettraceFolder, dir, httpAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(zedUpload.SyncOpList, "", "", 0, true, respChan)
@@ -153,7 +156,7 @@ func getHTTPObjectMetaData(t *testing.T, objloc string, objkey string, url, dir 
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, dir, httpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, nettraceFolder, dir, httpAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(zedUpload.SyncOpGetObjectMetaData, objkey, objloc, 0, true, respChan)

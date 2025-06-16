@@ -29,6 +29,9 @@ func TestGSDatastore(t *testing.T) {
 	if err := os.MkdirAll(gsDownloadDir, 0755); err != nil {
 		t.Fatalf("unable to make download directory: %v", err)
 	}
+	if err := os.MkdirAll(nettraceFolder, 0755); err != nil {
+		t.Fatalf("unable to make nettrace log directory: %v", err)
+	}
 	if gsBucket != "" && gsAPIKey != "" && gsProject != "" {
 		t.Run("API", testGSDatastoreAPI)
 		t.Run("Negative", testGSDatastoreNegative)
@@ -46,7 +49,7 @@ func operationGS(t *testing.T, objloc string, objkey string, operation zedUpload
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", gsBucket, gsAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", nettraceFolder, gsBucket, gsAuth)
 	if err == nil && dEndPoint != nil {
 		// use custom http client for testing same behaviour as in EVE
 		_ = dEndPoint.WithSrcIP(net.ParseIP("0.0.0.0"))
@@ -85,7 +88,7 @@ func operationGSNegative(t *testing.T, gsProject, gsAPIKey string, operation zed
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", gsBucket, gsAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", nettraceFolder, gsBucket, gsAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(operation, "gsteststuff", gsUploadFile, 0, true, respChan)
@@ -123,7 +126,7 @@ func listGSFiles(t *testing.T, bucket string) (bool, string) {
 	gsAuth := &zedUpload.AuthInput{AuthType: "gs", Uname: gsProject, Password: gsAPIKey}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", bucket, gsAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", nettraceFolder, bucket, gsAuth)
 
 	if err == nil && dEndPoint != nil {
 		// create Request
@@ -161,7 +164,7 @@ func getGSObjectMetaData(t *testing.T, objloc string, objkey string) (bool, stri
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", gsBucket, gsAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncGSTr, "", nettraceFolder, gsBucket, gsAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(zedUpload.SyncOpGetObjectMetaData, objkey, objloc, 0, true, respChan)

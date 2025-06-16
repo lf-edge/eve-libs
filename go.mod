@@ -19,7 +19,7 @@ require (
 require (
 	github.com/changkun/lockfree v0.0.1 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
-	github.com/google/uuid v1.3.0 // indirect
+	github.com/google/uuid v1.3.0
 	github.com/josharian/native v1.0.0 // indirect
 	github.com/mdlayher/socket v0.4.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -37,6 +37,7 @@ require (
 	github.com/go-chi/chi/v5 v5.0.10
 	github.com/google/go-containerregistry v0.6.0
 	github.com/pkg/sftp v1.12.0
+	go.etcd.io/bbolt v1.3.5
 	golang.org/x/crypto v0.36.0
 	golang.org/x/oauth2 v0.7.0
 	google.golang.org/api v0.114.0

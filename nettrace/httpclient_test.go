@@ -4,9 +4,11 @@
 package nettrace_test
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/lf-edge/eve-libs/nettrace"
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
 )
 
 func relTimeIsInBetween(t *GomegaWithT, timestamp, lowerBound, upperBound nettrace.Timestamp) {
@@ -716,6 +719,114 @@ func TestAllNameserversSkipped(test *testing.T) {
 	t.Expect(httpReq.ReqMethod).To(Equal("GET"))
 	t.Expect(httpReq.ReqURL).To(Equal("https://www.example.com"))
 	t.Expect(httpReq.ReqError).To(ContainSubstring("skipping any configured nameserver"))
+
+	err = client.Close()
+	t.Expect(err).ToNot(HaveOccurred())
+}
+
+func getLinkForDefaultRoute() (netlink.Link, error) {
+	routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range routes {
+		if (r.Dst == nil || r.Dst.IP.IsUnspecified()) && r.Gw != nil {
+			link, err := netlink.LinkByIndex(r.LinkIndex)
+			if err != nil {
+				return nil, err
+			}
+			return link, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+
+func getSourceIPForDefaultRoute(t *testing.T) net.IP {
+	link, err := getLinkForDefaultRoute()
+	if err != nil {
+		t.Skipf("Skipping test: no default route found (%v)", err)
+	}
+	ifName := link.Attrs().Name
+
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+	if err != nil {
+		t.Skipf("Skipping test: failed to list addresses for %s: %v", ifName, err)
+	}
+
+	for _, addr := range addrs {
+		if addr.IP == nil || addr.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		return addr.IP
+	}
+
+	t.Skipf("Skipping test: failed to get usable IP address for %s: %v", ifName, err)
+	return nil
+}
+
+func TestWithSourceIP(test *testing.T) {
+	t := NewWithT(test)
+
+	opts := []nettrace.TraceOpt{
+		&nettrace.WithLogging{
+			CustomLogger: logrus.New(),
+		},
+		&nettrace.WithHTTPReqTrace{},
+		&nettrace.WithDNSQueryTrace{},
+	}
+	sourceIP := getSourceIPForDefaultRoute(test)
+	fmt.Println(sourceIP)
+	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
+		PreferHTTP2:      true,
+		ReqTimeout:       5 * time.Second,
+		DisableKeepAlive: true,
+		SourceIP:         sourceIP,
+	}, opts...)
+	t.Expect(err).ToNot(HaveOccurred())
+
+	req, err := http.NewRequest("GET", "https://www.example.com", nil)
+	t.Expect(err).ToNot(HaveOccurred())
+	req.Header.Set("Accept", "text/html")
+	resp, err := client.Do(req)
+	t.Expect(err).ToNot(HaveOccurred())
+	t.Expect(resp).ToNot(BeNil())
+	t.Expect(resp.StatusCode).To(Equal(200))
+	t.Expect(resp.Body).ToNot(BeNil())
+	body := new(strings.Builder)
+	_, err = io.Copy(body, resp.Body)
+	t.Expect(err).ToNot(HaveOccurred())
+	err = resp.Body.Close()
+	t.Expect(err).ToNot(HaveOccurred())
+	t.Expect(body.String()).To(ContainSubstring("<html>"))
+	t.Expect(body.String()).To(ContainSubstring("</html>"))
+
+	trace, pcap, err := client.GetTrace("GET www.example.com with source IP set")
+	t.Expect(err).ToNot(HaveOccurred())
+	t.Expect(pcap).To(BeEmpty())
+
+	t.Expect(trace.Dials).To(HaveLen(1))
+	dial := trace.Dials[0]
+	t.Expect(dial.DstAddress).To(Equal("www.example.com:443"))
+	t.Expect(dial.EstablishedConn).ToNot(BeZero())
+	t.Expect(trace.DNSQueries).ToNot(BeEmpty())
+	for _, dnsQuery := range trace.DNSQueries {
+		t.Expect(dnsQuery.DNSQueryMsgs).To(HaveLen(1))
+		t.Expect(dnsQuery.DNSReplyMsgs).To(HaveLen(1))
+	}
+	t.Expect(trace.UDPConns).ToNot(BeEmpty())
+	t.Expect(trace.TCPConns).ToNot(BeEmpty())
+	for _, tcpConn := range trace.TCPConns {
+		t.Expect(tcpConn.AddrTuple.SrcIP).To(Equal(sourceIP.String()))
+		t.Expect(tcpConn.AddrTuple.DstIP).ToNot(BeEmpty())
+	}
+	t.Expect(trace.TLSTunnels).To(HaveLen(1))
+	tlsTun := trace.TLSTunnels[0]
+	t.Expect(tlsTun.ServerName).To(Equal("www.example.com"))
+	t.Expect(tlsTun.NegotiatedProto).To(Equal("h2"))
+	t.Expect(tlsTun.PeerCerts).ToNot(BeEmpty())
+	t.Expect(trace.HTTPRequests).To(HaveLen(1))
+	httpReq := trace.HTTPRequests[0]
+	t.Expect(httpReq.RespStatusCode).To(Equal(200))
 
 	err = client.Close()
 	t.Expect(err).ToNot(HaveOccurred())

@@ -6,18 +6,22 @@ package nettrace
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/golang-design/lockfree"
+	"github.com/google/uuid"
 	"github.com/mdlayher/netlink"
 	"github.com/sirupsen/logrus"
 	"github.com/ti-mo/conntrack"
+	"go.etcd.io/bbolt"
 	"golang.org/x/net/http2"
 	"golang.org/x/sys/unix"
 )
@@ -58,15 +62,31 @@ type HTTPClient struct {
 	tracingStartedAt Timestamp
 	pendingTraces    *lockfree.Queue // value: networkTrace
 	noConnSockets    []*inetSocket   // not-yet connected AF_INET sockets
-	connections      map[TraceID]*connection
-	dials            map[TraceID]*dial
-	tlsTuns          map[TraceID]*tlsTun
-	dnsQueries       map[TraceID]*DNSQueryTrace // Note: .FromDial is not always set here
-	httpReqs         map[TraceID]*HTTPReqTrace
+	connections      *evictingMap    // stores *connection, bucket="connections"
+	dials            *evictingMap    // stores *dial, bucket="dials"
+	tlsTuns          *evictingMap    // stores *tlsTun, bucket="tlsTuns"
+	dnsQueries       *evictingMap    // stores *DNSQueryTrace, bucket="dnsQueries"
+	httpReqs         *evictingMap    // stores *HTTPReqTrace, bucket="httpReqs"
+	db               *bbolt.DB
 
 	// Packet capture
 	packetCapturer *packetCapturer // nil if disabled
+
+	// unique UUID per HTTPClient instance
+	uuid string
 }
+
+const (
+	bucketConns         = "Connections"
+	bucketDials         = "Dials"
+	bucketTLSTuns       = "TlsTuns"
+	bucketDNSQueries    = "DNSQueries"
+	bucketHTTPReqs      = "HTTPReqs"
+	bucketTCPConns      = "TCPConns"
+	bucketUDPConns      = "UDPConns"
+	bucketNoConnSockets = "NoConnSockets"
+	netTraceFolder      = "/persist/nettrace/"
+)
 
 // NameserverSelector is a function that for a given nameserver decides
 // whether it should be used for name resolution or skipped.
@@ -185,18 +205,18 @@ type conntrackEntry struct {
 // Source/destination is from the client side.
 type connection struct {
 	addrTuple
-	id             TraceID
-	sockCreatedAt  Timestamp
-	connectedAt    Timestamp // for TCP this is just after handshake
-	closedAt       Timestamp
-	reused         bool
-	closed         bool
-	dialID         TraceID
-	fromResolver   bool
-	conntrack      conntrackEntry
-	totalRecvBytes uint64
-	totalSentBytes uint64
-	socketOps      []SocketOp
+	ID             TraceID
+	SockCreatedAt  Timestamp
+	ConnectedAt    Timestamp // for TCP this is just after handshake
+	ClosedAt       Timestamp
+	Reused         bool
+	Closed         bool
+	DialID         TraceID
+	FromResolver   bool
+	Conntrack      conntrackEntry
+	TotalRecvBytes uint64
+	TotalSentBytes uint64
+	SocketOps      []SocketOp
 }
 
 // Single attempt to establish TCP connection.
@@ -225,10 +245,20 @@ func NewHTTPClient(config HTTPClientCfg, traceOpts ...TraceOpt) (*HTTPClient, er
 		netProxy:       config.Proxy,
 		pendingTraces:  lockfree.NewQueue(),
 	}
+
+	// create netTrace folder
+	if err := os.MkdirAll(netTraceFolder, 0755); err != nil {
+		return nil, err
+	}
+	// Generate a unique UUID for this HTTPClient instance. This is important for
+	// the netrace files to be unique and not overwrite each other.
+	client.uuid = uuid.New().String()
+
 	err := client.resetTraces(true) // initialize maps
 	if err != nil {
 		return nil, err
 	}
+
 	client.tracingCtx, client.cancelTracing = context.WithCancel(context.Background())
 	client.tcpHandshakeTimeout = config.TCPHandshakeTimeout
 	client.tcpKeepAliveInterval = config.TCPKeepAliveInterval
@@ -306,6 +336,13 @@ func NewHTTPClient(config HTTPClientCfg, traceOpts ...TraceOpt) (*HTTPClient, er
 	return client, nil
 }
 
+func (c *HTTPClient) flushEvictedBatch(batch []finalizedTrace) {
+	err := c.writeBatchToBolt(batch)
+	if err != nil {
+		c.log.Errorf("Failed to write eviction batch to Bolt: %v", err)
+	}
+}
+
 func (c *HTTPClient) getTracerID() TraceID {
 	return c.id
 }
@@ -331,45 +368,449 @@ func (c *HTTPClient) publishTrace(t networkTrace) {
 func (c *HTTPClient) resetTraces(delOpenConns bool) error {
 	c.Lock()
 	defer c.Unlock()
+
+	// 2) Open DB on first use.
+	if c.db == nil {
+		db, err := bbolt.Open(netTraceFolder+"nettrace_"+c.uuid+".db", 0666, nil)
+		if err != nil {
+			return fmt.Errorf("open db: %w", err)
+		}
+		c.db = db
+	}
+	db := c.db
+
+	// 3) In one transaction, ensure Connections exists,
+	//    then wipe & recreate the other buckets (and Connections if requested).
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		// Always ensure Connections bucket exists
+		if tx.Bucket([]byte(bucketConns)) == nil {
+			if _, err := tx.CreateBucket([]byte(bucketConns)); err != nil {
+				return fmt.Errorf("create bucket %s: %w", bucketConns, err)
+			}
+		}
+
+		// Buckets we always reset:
+		buckets := []string{
+			bucketDials,
+			bucketTLSTuns,
+			bucketDNSQueries,
+			bucketHTTPReqs,
+			bucketConns,
+			bucketTCPConns,
+			bucketUDPConns,
+		}
+
+		// Conditionally reset Connections as well
+		if delOpenConns {
+			buckets = append(buckets, bucketConns)
+		}
+
+		for _, name := range buckets {
+			// Delete old bucket (ignore if missing)
+			if err := tx.DeleteBucket([]byte(name)); err != nil && err != bbolt.ErrBucketNotFound {
+				return fmt.Errorf("delete bucket %s: %w", name, err)
+			}
+			// Recreate it empty
+			if _, err := tx.CreateBucket([]byte(name)); err != nil {
+				return fmt.Errorf("create bucket %s: %w", name, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		c.log.Errorf("db.Update failed: %w", err)
+	}
 	// Make sure that all pending traces for open connections are processed.
-	c.processPendingTraces(delOpenConns)
 	prevStart := c.tracingStartedAt
 	c.tracingStartedAt = Timestamp{Abs: time.Now()}
 	c.noConnSockets = []*inetSocket{}
-	c.dials = make(map[TraceID]*dial)
-	c.tlsTuns = make(map[TraceID]*tlsTun)
-	c.dnsQueries = make(map[TraceID]*DNSQueryTrace)
-	c.httpReqs = make(map[TraceID]*HTTPReqTrace)
+	c.dials = newEvictingMap(5000, "dials", 100, c.flushEvictedBatch)
+	c.tlsTuns = newEvictingMap(5000, "tlsTuns", 100, c.flushEvictedBatch)
+	c.dnsQueries = newEvictingMap(5000, "dnsQueries", 100, c.flushEvictedBatch)
+	c.httpReqs = newEvictingMap(5000, "httpReqs", 100, c.flushEvictedBatch)
 	if delOpenConns {
-		c.connections = make(map[TraceID]*connection)
+		c.connections = newEvictingMap(5000, "connections", 100, c.flushEvictedBatch)
 	} else {
 		// Keep open connections, just turn relative timestamps into absolute ones.
 		// (otherwise they would turn negative)
-		for id, conn := range c.connections {
-			if !conn.closed {
-				conn.reused = true
-				if !conn.sockCreatedAt.Undefined() && conn.sockCreatedAt.IsRel {
-					conn.sockCreatedAt = prevStart.Add(conn.sockCreatedAt)
+		for _, id := range c.connections.order {
+			val, ok := c.connections.Get(id)
+			if !ok {
+				continue
+			}
+			conn, ok := val.(*connection)
+			if !ok {
+				continue
+			}
+			if !conn.Closed {
+				conn.Reused = true
+				if !conn.SockCreatedAt.Undefined() && conn.SockCreatedAt.IsRel {
+					conn.SockCreatedAt = prevStart.Add(conn.SockCreatedAt)
 				}
-				if !conn.connectedAt.Undefined() && conn.connectedAt.IsRel {
-					conn.connectedAt = prevStart.Add(conn.connectedAt)
+				if !conn.ConnectedAt.Undefined() && conn.ConnectedAt.IsRel {
+					conn.ConnectedAt = prevStart.Add(conn.ConnectedAt)
 				}
-				if !conn.closedAt.Undefined() && conn.closedAt.IsRel {
-					conn.closedAt = prevStart.Add(conn.closedAt)
+				if !conn.ClosedAt.Undefined() && conn.ClosedAt.IsRel {
+					conn.ClosedAt = prevStart.Add(conn.ClosedAt)
 				}
-				if !conn.conntrack.capturedAt.Undefined() && conn.conntrack.capturedAt.IsRel {
-					conn.conntrack.capturedAt = prevStart.Add(conn.conntrack.capturedAt)
+				if !conn.Conntrack.capturedAt.Undefined() && conn.Conntrack.capturedAt.IsRel {
+					conn.Conntrack.capturedAt = prevStart.Add(conn.Conntrack.capturedAt)
 				}
-				conn.conntrack.queriedAt = Timestamp{} // Reset to undefined timestamp.
+				conn.Conntrack.queriedAt = Timestamp{} // Reset to undefined timestamp.
 			} else {
-				delete(c.connections, id)
+				c.connections.Delete(id)
 			}
 		}
 	}
+	c.processPendingTraces(delOpenConns)
+
 	if c.packetCapturer != nil {
 		c.packetCapturer.clearPcap()
 	}
+
 	return nil
+}
+
+// ExportNetTraceToJSONFile exports the nettrace to a JSON file.
+func (c *HTTPClient) ExportNetTraceToJSONFile(filePath string) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	enc := json.NewEncoder(file)
+	if _, err := file.Write([]byte(`{"description":"nettrace_cache",`)); err != nil {
+		c.log.Errorf("Failed to write JSON header: %v", err)
+	}
+
+	// --- TraceBeginAt and TraceEndAt ---
+	if _, err := file.Write([]byte(`"traceBeginAt":`)); err != nil {
+		c.log.Errorf("Failed to write traceBeginAt: %v", err)
+	}
+	if err := enc.Encode(c.tracingStartedAt); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`,"traceEndAt":`)); err != nil {
+		c.log.Errorf("Failed to write traceEndAt: %v", err)
+	}
+	if err := enc.Encode(c.getRelTimestampNolock()); err != nil {
+		return err
+	}
+
+	// --- Dials ---
+	if _, err := file.Write([]byte(`,"dials":[`)); err != nil {
+		c.log.Errorf("Failed to write dials header: %v", err)
+	}
+	first := true
+	for _, id := range c.dials.order {
+		if dial, ok := c.dials.store[id].(*dial); ok {
+			if !first {
+				if _, err := file.Write([]byte(",")); err != nil {
+					c.log.Errorf("Failed to write comma separator in dials: %v", err)
+					return err
+				}
+			}
+			if err := enc.Encode(dial.DialTrace); err != nil {
+				return err
+			}
+			first = false
+		}
+	}
+	if err := c.streamBoltBucketToJSON("dials", file, enc, &first); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`],`)); err != nil {
+		c.log.Errorf("Failed to write dials end: %v", err)
+	}
+
+	// --- Connections ---
+	if _, err := file.Write([]byte(`"tcpConns":[`)); err != nil {
+		c.log.Errorf("Failed to write tcpConns header: %v", err)
+	}
+	first = true
+	for _, id := range c.connections.order {
+		if conn, ok := c.connections.store[id].(*connection); ok && conn.proto == syscall.IPPROTO_TCP {
+			if !first {
+				if _, err := file.Write([]byte(",")); err != nil {
+					c.log.Errorf("Failed to write connection comma: %v", err)
+				}
+			}
+			tcp := TCPConnTrace{
+				TraceID:          conn.ID,
+				FromDial:         conn.DialID,
+				FromResolver:     conn.FromResolver,
+				HandshakeBeginAt: conn.SockCreatedAt,
+				HandshakeEndAt:   conn.ConnectedAt,
+				Connected:        true,
+				ConnCloseAt:      conn.ClosedAt,
+				AddrTuple:        conn.addrTuple.toExportedAddrTuple(),
+				Reused:           conn.Reused,
+				TotalSentBytes:   conn.TotalSentBytes,
+				TotalRecvBytes:   conn.TotalRecvBytes,
+				Conntract:        conntrackToExportedEntry(conn.Conntrack.flow, conn.Conntrack.capturedAt),
+				SocketTrace:      &SocketTrace{SocketOps: conn.SocketOps},
+			}
+			if err := enc.Encode(tcp); err != nil {
+				return err
+			}
+			first = false
+		}
+	}
+	if err := c.streamBoltConnectionsToJSON(syscall.IPPROTO_TCP, file, enc, &first); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`],`)); err != nil {
+		c.log.Errorf("Failed to write tcpConns end: %v", err)
+	}
+
+	if _, err := file.Write([]byte(`"udpConns":[`)); err != nil {
+		c.log.Errorf("Failed to write udpConns header: %v", err)
+	}
+	first = true
+	for _, id := range c.connections.order {
+		if conn, ok := c.connections.store[id].(*connection); ok && conn.proto == syscall.IPPROTO_UDP {
+			if !first {
+				if _, err := file.Write([]byte(",")); err != nil {
+					c.log.Errorf("Failed to write comma separator in udpConns: %v", err)
+				}
+			}
+			udp := UDPConnTrace{
+				TraceID:        conn.ID,
+				FromDial:       conn.DialID,
+				FromResolver:   conn.FromResolver,
+				SocketCreateAt: conn.SockCreatedAt,
+				ConnCloseAt:    conn.ClosedAt,
+				AddrTuple:      conn.addrTuple.toExportedAddrTuple(),
+				TotalSentBytes: conn.TotalSentBytes,
+				TotalRecvBytes: conn.TotalRecvBytes,
+				Conntract:      conntrackToExportedEntry(conn.Conntrack.flow, conn.Conntrack.capturedAt),
+				SocketTrace:    &SocketTrace{SocketOps: conn.SocketOps},
+			}
+			if err := enc.Encode(udp); err != nil {
+				return err
+			}
+			first = false
+		}
+	}
+	if err := c.streamBoltConnectionsToJSON(syscall.IPPROTO_UDP, file, enc, &first); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`],`)); err != nil {
+		c.log.Errorf("Failed to write udpConns end: %v", err)
+	}
+
+	// --- DNS Queries ---
+	if _, err := file.Write([]byte(`"dnsQueries":[`)); err != nil {
+		c.log.Errorf("Failed to write dnsQueries header: %v", err)
+	}
+	first = true
+	for _, id := range c.dnsQueries.order {
+		if dnsQuery, ok := c.dnsQueries.store[id].(*DNSQueryTrace); ok {
+			if !first {
+				if !first {
+					if _, err := file.Write([]byte(",")); err != nil {
+						c.log.Errorf("Failed to write comma separator in dnsQueries: %v", err)
+					}
+				}
+			}
+			if err := enc.Encode(dnsQuery); err != nil {
+				return err
+			}
+			first = false
+		}
+	}
+	if err := c.streamBoltBucketToJSON("dnsQueries", file, enc, &first); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`],`)); err != nil {
+		c.log.Errorf("Failed to write dnsQueries end: %v", err)
+	}
+
+	// --- HTTP Requests ---
+	if _, err := file.Write([]byte(`"httpRequests":[`)); err != nil {
+		c.log.Errorf("Failed to write httpRequests header: %v", err)
+	}
+	first = true
+	for _, id := range c.httpReqs.order {
+		if req, ok := c.httpReqs.store[id].(*HTTPReqTrace); ok {
+			if !first {
+				if _, err := file.Write([]byte(",")); err != nil {
+					c.log.Errorf("Failed to write comma separator in httpRequests: %v", err)
+				}
+			}
+			if err := enc.Encode(req); err != nil {
+				return err
+			}
+			first = false
+		}
+	}
+	if err := c.streamBoltBucketToJSON("httpReqs", file, enc, &first); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`],`)); err != nil {
+		c.log.Errorf("Failed to write httpRequests end: %v", err)
+	}
+
+	// --- TLS Tunnels ---
+	if _, err := file.Write([]byte(`"tlsTunnels":[`)); err != nil {
+		c.log.Errorf("Failed to write tlsTunnels header: %v", err)
+	}
+	first = true
+	for _, id := range c.tlsTuns.order {
+		if tun, ok := c.tlsTuns.store[id].(*tlsTun); ok {
+			if !first {
+				if _, err := file.Write([]byte(",")); err != nil {
+					c.log.Errorf("Failed to write comma separator in tlsTunnels: %v", err)
+				}
+			}
+			if err := enc.Encode(tun.TLSTunnelTrace); err != nil {
+				return err
+			}
+			first = false
+		}
+	}
+	if err := c.streamBoltBucketToJSON("tlsTuns", file, enc, &first); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(`]`)); err != nil {
+		c.log.Errorf("Failed to write tlsTunnels end: %v", err)
+	}
+
+	if _, err := file.Write([]byte(`}`)); err != nil {
+		c.log.Errorf("Failed to write final JSON end: %v", err)
+	}
+	return nil
+}
+
+func (c *HTTPClient) streamBoltConnectionsToJSON(proto uint8, file *os.File, enc *json.Encoder, first *bool) error {
+	return c.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketConns))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			var conn connection
+			if err := json.Unmarshal(v, &conn); err != nil {
+				return err
+			}
+			if conn.proto != proto {
+				return nil
+			}
+			if !*first {
+				if _, err := file.Write([]byte(",")); err != nil {
+					c.log.Errorf("Failed to write comma separator in bolt connections: %v", err)
+				}
+			}
+			if proto == syscall.IPPROTO_TCP {
+				tcp := TCPConnTrace{
+					TraceID:          conn.ID,
+					FromDial:         conn.DialID,
+					FromResolver:     conn.FromResolver,
+					HandshakeBeginAt: conn.SockCreatedAt,
+					HandshakeEndAt:   conn.ConnectedAt,
+					Connected:        true,
+					ConnCloseAt:      conn.ClosedAt,
+					AddrTuple:        conn.addrTuple.toExportedAddrTuple(),
+					Reused:           conn.Reused,
+					TotalSentBytes:   conn.TotalSentBytes,
+					TotalRecvBytes:   conn.TotalRecvBytes,
+					Conntract:        conntrackToExportedEntry(conn.Conntrack.flow, conn.Conntrack.capturedAt),
+					SocketTrace:      &SocketTrace{SocketOps: conn.SocketOps},
+				}
+				if err := enc.Encode(tcp); err != nil {
+					return err
+				}
+			} else {
+				udp := UDPConnTrace{
+					TraceID:        conn.ID,
+					FromDial:       conn.DialID,
+					FromResolver:   conn.FromResolver,
+					SocketCreateAt: conn.SockCreatedAt,
+					ConnCloseAt:    conn.ClosedAt,
+					AddrTuple:      conn.addrTuple.toExportedAddrTuple(),
+					TotalSentBytes: conn.TotalSentBytes,
+					TotalRecvBytes: conn.TotalRecvBytes,
+					Conntract:      conntrackToExportedEntry(conn.Conntrack.flow, conn.Conntrack.capturedAt),
+					SocketTrace:    &SocketTrace{SocketOps: conn.SocketOps},
+				}
+				if err := enc.Encode(udp); err != nil {
+					return err
+				}
+			}
+			*first = false
+			return nil
+		})
+	})
+}
+
+func (c *HTTPClient) streamBoltBucketToJSON(bucketName string, file *os.File, enc *json.Encoder, first *bool) error {
+	return c.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		if b == nil {
+			return nil // Empty bucket, nothing to write
+		}
+		return b.ForEach(func(k, v []byte) error {
+			switch bucketName {
+			case "dials":
+				var dial DialTrace
+				if err := json.Unmarshal(v, &dial); err != nil {
+					return err
+				}
+				if !*first {
+					if _, err := file.Write([]byte(",")); err != nil {
+						c.log.Errorf("Failed to write comma separator in dials: %v", err)
+					}
+				}
+				if err := enc.Encode(dial); err != nil {
+					return err
+				}
+			case "dnsQueries":
+				var dns DNSQueryTrace
+				if err := json.Unmarshal(v, &dns); err != nil {
+					return err
+				}
+				if !*first {
+					if _, err := file.Write([]byte(",")); err != nil {
+						c.log.Errorf("Failed to write comma separator in dnsQueries: %v", err)
+					}
+				}
+				if err := enc.Encode(dns); err != nil {
+					return err
+				}
+			case "httpReqs":
+				var req HTTPReqTrace
+				if err := json.Unmarshal(v, &req); err != nil {
+					return err
+				}
+				if !*first {
+					if _, err := file.Write([]byte(",")); err != nil {
+						c.log.Errorf("Failed to write comma separator in httpReqs: %v", err)
+					}
+				}
+				if err := enc.Encode(req); err != nil {
+					return err
+				}
+			case "tlsTuns":
+				var tls TLSTunnelTrace
+				if err := json.Unmarshal(v, &tls); err != nil {
+					return err
+				}
+				if !*first {
+					if _, err := file.Write([]byte(",")); err != nil {
+						c.log.Errorf("Failed to write comma separator in tlsTunnels: %v", err)
+					}
+				}
+				if err := enc.Encode(tls); err != nil {
+					return err
+				}
+			default:
+				// Unknown or unsupported bucket; skip silently or log a warning if desired
+				return nil
+			}
+			*first = false
+			return nil
+		})
+	})
 }
 
 // GetTrace returns a summary of all network and HTTP trace records (aka HTTPTrace),
@@ -384,24 +825,41 @@ func (c *HTTPClient) resetTraces(delOpenConns bool) error {
 func (c *HTTPClient) GetTrace(description string) (HTTPTrace, []PacketCapture, error) {
 	c.Lock()
 	defer c.Unlock()
+
+	// export net traces to JSON file
+	nettraceName := "nettrace_" + c.uuid + ".json"
+	err := c.ExportNetTraceToJSONFile(netTraceFolder + nettraceName)
+	if err != nil {
+		c.log.Errorf("Failed to export net trace to JSON file: %v", err)
+	}
 	// Last-minute processing of collected traces...
 	c.processPendingTraces(false)
 	c.periodicSockUpdate(true)
 	c.periodicConnUpdate(true)
+
 	// Collect captured packets.
 	var pcaps []PacketCapture
 	if c.packetCapturer != nil {
 		pcaps = c.packetCapturer.getPcap()
 	}
+
 	// Combine all network traces into one HTTPTrace.
 	httpTrace := HTTPTrace{NetTrace: NetTrace{
 		Description:  description,
 		TraceBeginAt: c.tracingStartedAt,
 		TraceEndAt:   c.getRelTimestampNolock(),
+		UUID:         c.uuid,
 	}}
-	for _, dial := range c.dials {
-		httpTrace.Dials = append(httpTrace.Dials, dial.DialTrace)
+
+	ids := append([]TraceID(nil), c.dials.order...) // safe copy
+
+	for _, id := range ids {
+		if dial, ok := c.dials.store[id].(*dial); ok {
+			httpTrace.Dials = append(httpTrace.Dials, dial.DialTrace)
+		}
+		c.dials.Delete(id)
 	}
+
 	for _, sock := range c.noConnSockets {
 		conntrack := conntrackToExportedEntry(sock.conntrack.flow, sock.conntrack.capturedAt)
 		switch sock.proto {
@@ -428,72 +886,113 @@ func (c *HTTPClient) GetTrace(description string) (HTTPTrace, []PacketCapture, e
 			})
 		}
 	}
-	for _, conn := range c.connections {
-		conntrack := conntrackToExportedEntry(conn.conntrack.flow, conn.conntrack.capturedAt)
+
+	ids = append([]TraceID(nil), c.connections.order...) // safe copy
+
+	for _, id := range ids {
+		connIface := c.connections.store[id]
+		conn, ok := connIface.(*connection)
+		if !ok {
+			continue
+		}
+		conntrack := conntrackToExportedEntry(conn.Conntrack.flow, conn.Conntrack.capturedAt)
 		var socketTrace *SocketTrace
 		if c.withSockTrace {
-			socketTrace = &SocketTrace{SocketOps: conn.socketOps}
+			socketTrace = &SocketTrace{SocketOps: conn.SocketOps}
 		}
 		switch conn.proto {
 		case syscall.IPPROTO_TCP:
 			httpTrace.TCPConns = append(httpTrace.TCPConns, TCPConnTrace{
-				TraceID:          conn.id,
-				FromDial:         conn.dialID,
-				FromResolver:     conn.fromResolver,
-				HandshakeBeginAt: conn.sockCreatedAt,
-				HandshakeEndAt:   conn.connectedAt,
+				TraceID:          conn.ID,
+				FromDial:         conn.DialID,
+				FromResolver:     conn.FromResolver,
+				HandshakeBeginAt: conn.SockCreatedAt,
+				HandshakeEndAt:   conn.ConnectedAt,
 				Connected:        true,
-				ConnCloseAt:      conn.closedAt,
+				ConnCloseAt:      conn.ClosedAt,
 				AddrTuple:        conn.addrTuple.toExportedAddrTuple(),
-				Reused:           conn.reused,
-				TotalSentBytes:   conn.totalSentBytes,
-				TotalRecvBytes:   conn.totalRecvBytes,
+				Reused:           conn.Reused,
+				TotalSentBytes:   conn.TotalSentBytes,
+				TotalRecvBytes:   conn.TotalRecvBytes,
 				Conntract:        conntrack,
 				SocketTrace:      socketTrace,
 			})
 		case syscall.IPPROTO_UDP:
 			httpTrace.UDPConns = append(httpTrace.UDPConns, UDPConnTrace{
-				TraceID:        conn.id,
-				FromDial:       conn.dialID,
-				FromResolver:   conn.fromResolver,
-				SocketCreateAt: conn.sockCreatedAt,
-				ConnCloseAt:    conn.closedAt,
+				TraceID:        conn.ID,
+				FromDial:       conn.DialID,
+				FromResolver:   conn.FromResolver,
+				SocketCreateAt: conn.SockCreatedAt,
+				ConnCloseAt:    conn.ClosedAt,
 				AddrTuple:      conn.addrTuple.toExportedAddrTuple(),
-				TotalSentBytes: conn.totalSentBytes,
-				TotalRecvBytes: conn.totalRecvBytes,
+				TotalSentBytes: conn.TotalSentBytes,
+				TotalRecvBytes: conn.TotalRecvBytes,
 				Conntract:      conntrack,
 				SocketTrace:    socketTrace,
 			})
 		}
+
+		// Safe deletion after using the copied slice
+		c.connections.Delete(id)
 	}
-	for _, dnsQuery := range c.dnsQueries {
+
+	ids = append([]TraceID(nil), c.dnsQueries.order...) // copy order slice
+	for _, id := range ids {
+		dnsIface := c.dnsQueries.store[id]
+		dnsQuery, ok := dnsIface.(*DNSQueryTrace)
+		if !ok {
+			continue
+		}
 		if dnsQuery.FromDial.Undefined() {
-			if connTrace, ok := c.connections[dnsQuery.Connection]; ok {
-				dnsQuery.FromDial = connTrace.dialID
+			if connIface, ok := c.connections.store[dnsQuery.Connection]; ok {
+				if connTrace, ok := connIface.(*connection); ok {
+					dnsQuery.FromDial = connTrace.DialID
+				}
 			}
 		}
 		httpTrace.DNSQueries = append(httpTrace.DNSQueries, *dnsQuery)
+		c.dnsQueries.Delete(id)
 	}
-	for _, httpReq := range c.httpReqs {
+
+	ids = append([]TraceID(nil), c.httpReqs.order...) // reuse ids variable
+	for _, id := range ids {
+		reqIface := c.httpReqs.store[id]
+		httpReq, ok := reqIface.(*HTTPReqTrace)
+		if !ok {
+			continue
+		}
 		if httpReq.TCPConn.Undefined() {
-			// Certainly not reused connection.
-			// Try to find the corresponding Dial.
-			for _, dial := range c.dials {
-				if !dial.httpReqID.Undefined() && dial.httpReqID == httpReq.TraceID {
-					httpReq.TCPConn = dial.EstablishedConn
+			for _, dialID := range c.dials.order {
+				dIface := c.dials.store[dialID]
+				if dial, ok := dIface.(*dial); ok {
+					if !dial.httpReqID.Undefined() && dial.httpReqID == httpReq.TraceID {
+						httpReq.TCPConn = dial.EstablishedConn
+					}
 				}
 			}
 		}
 		httpTrace.HTTPRequests = append(httpTrace.HTTPRequests, *httpReq)
+		c.httpReqs.Delete(id)
 	}
-	for _, tlsTun := range c.tlsTuns {
+
+	ids = append([]TraceID(nil), c.tlsTuns.order...) // reuse ids variable
+	for _, id := range ids {
+		tIface := c.tlsTuns.store[id]
+		tlsTun, ok := tIface.(*tlsTun)
+		if !ok {
+			continue
+		}
 		if tlsTun.TCPConn.Undefined() {
-			if httpReq, ok := c.httpReqs[tlsTun.httpReqID]; ok {
-				tlsTun.TCPConn = httpReq.TCPConn
+			if rIface, ok := c.httpReqs.store[tlsTun.httpReqID]; ok {
+				if httpReq, ok := rIface.(*HTTPReqTrace); ok {
+					tlsTun.TCPConn = httpReq.TCPConn
+				}
 			}
 		}
 		httpTrace.TLSTunnels = append(httpTrace.TLSTunnels, tlsTun.TLSTunnelTrace)
+		c.tlsTuns.Delete(id)
 	}
+
 	return httpTrace, pcaps, nil
 }
 
@@ -647,27 +1146,57 @@ func (c *HTTPClient) closeSockDupFD(sock *inetSocket) {
 // The function should be called with HTTPClient locked.
 func (c *HTTPClient) periodicConnUpdate(gettingTrace bool) {
 	now := c.getRelTimestampNolock()
-	// How frequently to update conntrack entry for established connection.
 	const conntrackUpdatePeriod = 20 * time.Second
-	for _, conn := range c.connections {
-		if conn.closed {
-			// No longer actively traced.
+
+	for _, id := range c.connections.order {
+		connIface := c.connections.store[id]
+		conn, ok := connIface.(*connection)
+		if !ok || conn.Closed {
 			continue
 		}
 		if c.nfConn != nil {
-			if gettingTrace || conn.conntrack.queriedAt.Undefined() ||
-				now.Sub(conn.conntrack.queriedAt) >= conntrackUpdatePeriod {
-				c.getConntrack(conn.addrTuple, &conn.conntrack, now)
+			if gettingTrace || conn.Conntrack.queriedAt.Undefined() ||
+				now.Sub(conn.Conntrack.queriedAt) >= conntrackUpdatePeriod {
+				c.getConntrack(conn.addrTuple, &conn.Conntrack, now)
 			}
 		}
 	}
 }
 
-// processPendingTraces : processes all currently pending network traces.
-// The function should be called with HTTPClient locked.
+type finalizedTrace struct {
+	Bucket string
+	Key    TraceID
+	Value  interface{}
+}
+
+func (c *HTTPClient) writeBatchToBolt(batch []finalizedTrace) error {
+	return c.db.Update(func(tx *bbolt.Tx) error {
+		for _, entry := range batch {
+			b := tx.Bucket([]byte(entry.Bucket))
+			if b == nil {
+				var err error
+				b, err = tx.CreateBucketIfNotExists([]byte(entry.Bucket))
+				if err != nil {
+					return err
+				}
+			}
+			data, err := json.Marshal(entry.Value)
+			if err != nil {
+				return err
+			}
+			if err := b.Put([]byte(fmt.Sprintf("%v", entry.Key)), data); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (c *HTTPClient) processPendingTraces(dropAll bool) {
 	var i uint64
 	traceCount := c.pendingTraces.Length()
+	var batch []finalizedTrace
+
 	for i = 0; i < traceCount; i++ {
 		item := c.pendingTraces.Dequeue()
 		now := c.getRelTimestampNolock()
@@ -695,8 +1224,7 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 				dial.SourceIP = t.SourceIP
 				dial.DstAddress = t.DstAddress
 			}
-			// Stop monitoring sockets created by this Dial.
-			connAddrTuple := addrTupleFromConn(t.conn) // undefined if dial failed
+			connAddrTuple := addrTupleFromConn(t.conn)
 			connSockIdx := -1
 			for idx, sock := range c.noConnSockets {
 				if sock.fromDial == dial.TraceID {
@@ -707,24 +1235,22 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 				}
 			}
 			if t.conn != nil {
-				// Add entry for newly created connection.
 				connection := &connection{
-					id:          t.EstablishedConn,
+					ID:          t.EstablishedConn,
 					addrTuple:   connAddrTuple,
-					connectedAt: t.DialEndAt,
-					dialID:      dial.TraceID,
+					ConnectedAt: t.DialEndAt,
+					DialID:      dial.TraceID,
 				}
 				if connSockIdx != -1 {
-					connection.sockCreatedAt = c.noConnSockets[connSockIdx].createdAt
-					connection.conntrack = c.noConnSockets[connSockIdx].conntrack
+					connection.SockCreatedAt = c.noConnSockets[connSockIdx].createdAt
+					connection.Conntrack = c.noConnSockets[connSockIdx].conntrack
 				}
 				if c.nfConn != nil {
-					c.getConntrack(connAddrTuple, &connection.conntrack, now)
+					c.getConntrack(connAddrTuple, &connection.Conntrack, now)
 				}
-				c.connections[t.EstablishedConn] = connection
+				c.connections.Set(t.EstablishedConn, connection)
 			}
 			if connSockIdx != -1 {
-				// Socket is connected - remove it from the noConnSockets slice.
 				c.delNoConnSocket(connSockIdx)
 			}
 
@@ -751,20 +1277,20 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 			if t.conn != nil {
 				// Add entry for newly created connection.
 				connection := &connection{
-					id:           t.connID,
+					ID:           t.connID,
 					addrTuple:    connAddrTuple,
-					connectedAt:  t.dialEndAt,
-					dialID:       t.parentDial,
-					fromResolver: true,
+					ConnectedAt:  t.dialEndAt,
+					DialID:       t.parentDial,
+					FromResolver: true,
 				}
 				if connSockIdx != -1 {
-					connection.sockCreatedAt = c.noConnSockets[connSockIdx].createdAt
-					connection.conntrack = c.noConnSockets[connSockIdx].conntrack
+					connection.SockCreatedAt = c.noConnSockets[connSockIdx].createdAt
+					connection.Conntrack = c.noConnSockets[connSockIdx].conntrack
 				}
 				if c.nfConn != nil {
-					c.getConntrack(connAddrTuple, &connection.conntrack, now)
+					c.getConntrack(connAddrTuple, &connection.Conntrack, now)
 				}
-				c.connections[t.connID] = connection
+				c.connections.Set(t.connID, connection)
 			}
 			if connSockIdx != -1 {
 				// Socket is connected - remove it from the noConnSockets slice.
@@ -774,25 +1300,32 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 		case resolverCloseTrace:
 			dial := c.getOrAddDialTrace(t.parentDial)
 			dial.SkippedNameservers = t.skippedServers
+			batch = append(batch, finalizedTrace{Key: t.parentDial, Bucket: "dials", Value: dial})
+			c.dials.Delete(t.parentDial)
 
 		case socketOpTrace:
-			if connection := c.connections[t.connID]; connection != nil {
-				if t.closed {
-					connection.closed = true
-					connection.closedAt = t.ReturnAt
-					if c.nfConn != nil {
-						c.getConntrack(connection.addrTuple, &connection.conntrack, now)
-					}
-				} else {
-					switch t.SocketOp.Type {
-					case SocketOpTypeRead, SocketOpTypeReadFrom:
-						connection.totalRecvBytes += uint64(t.SocketOp.DataLen)
-					case SocketOpTypeWrite, SocketOpTypeWriteTo:
-						connection.totalSentBytes += uint64(t.SocketOp.DataLen)
-					}
-					if c.withSockTrace {
-						connection.socketOps = append(connection.socketOps, t.SocketOp)
-					}
+			connIface, ok := c.connections.Get(t.connID)
+			if !ok {
+				break
+			}
+			connection := connIface.(*connection)
+			if t.closed {
+				connection.Closed = true
+				connection.ClosedAt = t.ReturnAt
+				if c.nfConn != nil {
+					c.getConntrack(connection.addrTuple, &connection.Conntrack, now)
+				}
+				batch = append(batch, finalizedTrace{Key: connection.ID, Bucket: "connections", Value: connection})
+				c.connections.Delete(connection.ID)
+			} else {
+				switch t.SocketOp.Type {
+				case SocketOpTypeRead, SocketOpTypeReadFrom:
+					connection.TotalRecvBytes += uint64(t.SocketOp.DataLen)
+				case SocketOpTypeWrite, SocketOpTypeWriteTo:
+					connection.TotalSentBytes += uint64(t.SocketOp.DataLen)
+				}
+				if c.withSockTrace {
+					connection.SocketOps = append(connection.SocketOps, t.SocketOp)
 				}
 			}
 
@@ -814,6 +1347,10 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 		case dnsReplyTrace:
 			dnsTrace := c.getOrAddDNSTrace(t.connID)
 			dnsTrace.DNSReplyMsgs = append(dnsTrace.DNSReplyMsgs, t.DNSReplyMsg)
+			if len(dnsTrace.DNSQueryMsgs) > 0 && len(dnsTrace.DNSReplyMsgs) > 0 {
+				batch = append(batch, finalizedTrace{Key: dnsTrace.TraceID, Bucket: "dnsQueries", Value: dnsTrace})
+				c.dnsQueries.Delete(dnsTrace.TraceID)
+			}
 
 		case httpBodyTrace:
 			httpReqTrace := c.getOrAddHTTPReqTrace(t.httpReqID)
@@ -826,7 +1363,7 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 		case httpConnTrace:
 			httpReqTrace := c.getOrAddHTTPReqTrace(t.httpReqID)
 			if connTrace := c.lookupConnTrace(t.conn); connTrace != nil {
-				httpReqTrace.TCPConn = connTrace.id
+				httpReqTrace.TCPConn = connTrace.ID
 			}
 
 		case httpReqTrace:
@@ -854,24 +1391,37 @@ func (c *HTTPClient) processPendingTraces(dropAll bool) {
 			httpReqTrace.RespRecvAt = t.recvAt
 			httpReqTrace.RespStatusCode = t.statusCode
 			httpReqTrace.RespHeader = t.header
-
-		default:
-			c.log.Warningf("nettrace: networkTracer id=%s: unrecognized trace (%T): %v\n",
-				c.id, t, t)
+			if !httpReqTrace.ReqSentAt.Undefined() && !httpReqTrace.RespRecvAt.Undefined() {
+				batch = append(batch, finalizedTrace{Key: httpReqTrace.TraceID, Bucket: "httpReqs", Value: httpReqTrace})
+				c.httpReqs.Delete(httpReqTrace.TraceID)
+			}
 		}
 	}
+
+	if err := c.writeBatchToBolt(batch); err != nil {
+		c.log.Errorf("nettrace: failed to write batch to Bolt: %v", err)
+	}
+
 }
 
 func (c *HTTPClient) getOrAddDialTrace(id TraceID) *dial {
-	if _, haveEntry := c.dials[id]; !haveEntry {
-		c.dials[id] = &dial{DialTrace: DialTrace{TraceID: id}}
+	if val, ok := c.dials.Get(id); ok {
+		if d, ok := val.(*dial); ok {
+			return d
+		}
 	}
-	return c.dials[id]
+	d := &dial{DialTrace: DialTrace{TraceID: id}}
+	c.dials.Set(id, d)
+	return d
 }
 
 func (c *HTTPClient) getOrAddDNSTrace(connID TraceID) *DNSQueryTrace {
-	for _, dnsQuery := range c.dnsQueries {
-		if dnsQuery.Connection == connID {
+	for _, id := range c.dnsQueries.order {
+		entry, ok := c.dnsQueries.Get(id)
+		if !ok {
+			continue
+		}
+		if dnsQuery, ok := entry.(*DNSQueryTrace); ok && dnsQuery.Connection == connID {
 			return dnsQuery
 		}
 	}
@@ -879,22 +1429,30 @@ func (c *HTTPClient) getOrAddDNSTrace(connID TraceID) *DNSQueryTrace {
 		TraceID:    IDGenerator(),
 		Connection: connID,
 	}
-	c.dnsQueries[trace.TraceID] = trace
+	c.dnsQueries.Set(trace.TraceID, trace)
 	return trace
 }
 
 func (c *HTTPClient) getOrAddTLSTunTrace(id TraceID) *tlsTun {
-	if _, haveEntry := c.tlsTuns[id]; !haveEntry {
-		c.tlsTuns[id] = &tlsTun{TLSTunnelTrace: TLSTunnelTrace{TraceID: id}}
+	if val, ok := c.tlsTuns.Get(id); ok {
+		if t, ok := val.(*tlsTun); ok {
+			return t
+		}
 	}
-	return c.tlsTuns[id]
+	t := &tlsTun{TLSTunnelTrace: TLSTunnelTrace{TraceID: id}}
+	c.tlsTuns.Set(id, t)
+	return t
 }
 
 func (c *HTTPClient) getOrAddHTTPReqTrace(id TraceID) *HTTPReqTrace {
-	if _, haveEntry := c.httpReqs[id]; !haveEntry {
-		c.httpReqs[id] = &HTTPReqTrace{TraceID: id}
+	if val, ok := c.httpReqs.Get(id); ok {
+		if r, ok := val.(*HTTPReqTrace); ok {
+			return r
+		}
 	}
-	return c.httpReqs[id]
+	r := &HTTPReqTrace{TraceID: id}
+	c.httpReqs.Set(id, r)
+	return r
 }
 
 func (c *HTTPClient) finalizeNoConnSocket(sock *inetSocket, connected bool, now Timestamp) {
@@ -922,7 +1480,15 @@ func (c *HTTPClient) delNoConnSocket(idx int) {
 
 func (c *HTTPClient) lookupConnTrace(conn net.Conn) *connection {
 	addr := addrTupleFromConn(conn)
-	for _, connTrace := range c.connections {
+	for _, id := range c.connections.order {
+		val, ok := c.connections.Get(id)
+		if !ok {
+			continue
+		}
+		connTrace, ok := val.(*connection)
+		if !ok {
+			continue
+		}
 		if connTrace.addrTuple.equal(addr) {
 			return connTrace
 		}
@@ -944,8 +1510,16 @@ func (c *HTTPClient) iterNoConnSockets(iterCb connIterCallback) {
 }
 
 func (c *HTTPClient) iterConnections(iterCb connIterCallback) {
-	for _, conn := range c.connections {
-		stop := iterCb(conn.addrTuple, conn.conntrack.flow)
+	for _, id := range c.connections.order {
+		val, ok := c.connections.Get(id)
+		if !ok {
+			continue
+		}
+		conn, ok := val.(*connection)
+		if !ok {
+			continue
+		}
+		stop := iterCb(conn.addrTuple, conn.Conntrack.flow)
 		if stop {
 			return
 		}

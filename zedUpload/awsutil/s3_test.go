@@ -33,7 +33,7 @@ func getEnvOrSkip(t *testing.T, key string) string {
 }
 
 // setupTestBucket creates a bucket whose name is prefix-<timestamp>
-func setupTests(t *testing.T) (*S3ctx, string, string) {
+func setupTests(t *testing.T) (*S3ctx, string, string, bool) {
 	t.Helper()
 
 	// Cleanup: delete every object, then the bucket.
@@ -44,19 +44,20 @@ func setupTests(t *testing.T) (*S3ctx, string, string) {
 	accessKey := getEnvOrSkip(t, "AWS_ACCESS_KEY_ID")
 	secretKey := getEnvOrSkip(t, "AWS_SECRET_ACCESS_KEY")
 	region := getEnvOrSkip(t, "AWS_REGION")
+	_, useIPv6 := os.LookupEnv("AWS_USE_IPV6")
 
 	// Initialize a real S3ctx
-	s, err := NewAwsCtx(accessKey, secretKey, region, nil)
+	s, err := NewAwsCtx(accessKey, secretKey, region, useIPv6, nil)
 	if err != nil {
 		t.Fatalf("NewAwsCtx failed: %v", err)
 	}
 
-	return s, baseBucket, region
+	return s, baseBucket, region, useIPv6
 }
 
 func TestUploadFile(t *testing.T) {
 	// get context and bucket
-	s, bucket, region := setupTests(t)
+	s, bucket, region, useIPv6 := setupTests(t)
 
 	key := "test-object"
 	// cleanup
@@ -92,8 +93,12 @@ func TestUploadFile(t *testing.T) {
 		t.Fatalf("could not parse Location %q: %v", loc, err)
 	}
 
-	// For non-us-east-1 regions the host is "<bucket>.s3.<region>.amazonaws.com"
-	wantHost := fmt.Sprintf("%s.s3.%s.amazonaws.com", bucket, region)
+	// For non-us-east-1 regions the host is "<bucket>.s3.[dualstack.]<region>.amazonaws.com"
+	var dualstack string
+	if useIPv6 {
+		dualstack = "dualstack."
+	}
+	wantHost := fmt.Sprintf("%s.s3.%s%s.amazonaws.com", bucket, dualstack, region)
 	if u.Host != wantHost {
 		t.Errorf("wrong host: got %q, want %q", u.Host, wantHost)
 	}
@@ -114,7 +119,7 @@ func TestUploadFile(t *testing.T) {
 
 func TestDownloadFile(t *testing.T) {
 	// get context and bucket
-	s, bucket, region := setupTests(t)
+	s, bucket, region, useIPv6 := setupTests(t)
 
 	key := "test-object"
 	// cleanup
@@ -150,7 +155,11 @@ func TestDownloadFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing Location %q: %v", loc, err)
 	}
-	wantHost := fmt.Sprintf("%s.s3.%s.amazonaws.com", bucket, region)
+	var dualstack string
+	if useIPv6 {
+		dualstack = "dualstack."
+	}
+	wantHost := fmt.Sprintf("%s.s3.%s%s.amazonaws.com", bucket, dualstack, region)
 	if u.Host != wantHost {
 		t.Errorf("unexpected host: got %q, want %q", u.Host, wantHost)
 	}
@@ -181,7 +190,7 @@ func TestDownloadFile(t *testing.T) {
 // TestListImages creates two objects and ensures ListImages returns their keys.
 func TestListImages(t *testing.T) {
 	// get context and bucket
-	s, bucket, _ := setupTests(t)
+	s, bucket, _, _ := setupTests(t)
 
 	keys := []string{"imgA", "imgB"}
 	// cleanup
@@ -234,7 +243,7 @@ func TestListImages(t *testing.T) {
 // TestGetObjectMetaData uploads one object and verifies GetObjectMetaData returns the right size & MD5.
 func TestGetObjectMetaData(t *testing.T) {
 	// get context and bucket
-	s, bucket, region := setupTests(t)
+	s, bucket, region, useIPv6 := setupTests(t)
 
 	key := "single-object"
 	// cleanup
@@ -263,7 +272,11 @@ func TestGetObjectMetaData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing Location: %v", err)
 	}
-	wantHost := fmt.Sprintf("%s.s3.%s.amazonaws.com", bucket, region)
+	var dualstack string
+	if useIPv6 {
+		dualstack = "dualstack."
+	}
+	wantHost := fmt.Sprintf("%s.s3.%s%s.amazonaws.com", bucket, dualstack, region)
 	if u.Host != wantHost {
 		t.Errorf("unexpected host: got %q, want %q", u.Host, wantHost)
 	}
@@ -285,7 +298,7 @@ func TestGetObjectMetaData(t *testing.T) {
 }
 func TestDownloadFileByChunks(t *testing.T) {
 	// get context and bucket
-	s, bucket, _ := setupTests(t)
+	s, bucket, _, _ := setupTests(t)
 
 	key := "chunk-object"
 	// cleanup
@@ -348,7 +361,7 @@ func TestDownloadFileByChunks(t *testing.T) {
 // (with uploadID="") returns a valid uploadID and non-empty ETag.
 func TestUploadPartCreateUploadID(t *testing.T) {
 	// get context and bucket
-	s, bucket, _ := setupTests(t)
+	s, bucket, _, _ := setupTests(t)
 	// create the bucket
 	err := s.CreateBucket(bucket)
 	if err != nil {
@@ -385,7 +398,7 @@ func TestUploadPartCreateUploadID(t *testing.T) {
 // then downloads the assembled object and verifies its full content.
 func TestUploadPartMultipartComplete(t *testing.T) {
 	// get context and bucket
-	s, bucket, _ := setupTests(t)
+	s, bucket, _, _ := setupTests(t)
 	// create the bucket
 	err := s.CreateBucket(bucket)
 	if err != nil {
@@ -454,7 +467,7 @@ func TestUploadPartMultipartComplete(t *testing.T) {
 // TestGetSignedURL uploads an object and then fetches it using a presigned URL.
 func TestGetSignedURL(t *testing.T) {
 	// get context and bucket
-	s, bucket, _ := setupTests(t)
+	s, bucket, _, _ := setupTests(t)
 
 	key := "signed-object"
 	// Prepare and upload a small file.

@@ -38,17 +38,23 @@ type S3ctx struct {
 }
 
 // NewAwsCtx initializes AWS S3 context using SDK v2
-func NewAwsCtx(id, secret, region string, hctx *http.Client) (*S3ctx, error) {
+func NewAwsCtx(id, secret, region string, useIPv6 bool, hctx *http.Client) (*S3ctx, error) {
 	ctx := context.Background()
 	logger := logrus.New()
 	logger.SetLevel(logrus.TraceLevel)
 
+	// Enable dual-stack (IPv4 + IPv6) endpoint if IPv6 is in use.
+	dualStackState := aws.DualStackEndpointStateUnset
+	if useIPv6 {
+		dualStackState = aws.DualStackEndpointStateEnabled
+	}
 	// Load config with static credentials
 	cfg, err := awsConfig.LoadDefaultConfig(ctx,
 		awsConfig.WithRegion(region),
 		awsConfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(id, secret, ""),
 		),
+		awsConfig.WithUseDualStackEndpoint(dualStackState),
 	)
 	if err != nil {
 		return nil, err

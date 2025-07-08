@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"github.com/lf-edge/eve-libs/nettrace"
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
@@ -27,7 +29,80 @@ func relTimeIsInBetween(t *GomegaWithT, timestamp, lowerBound, upperBound nettra
 	t.Expect(timestamp.Rel <= upperBound.Rel).To(BeTrue())
 }
 
+func checkCapturedTCPHandshakeForHTTPS(t *testing.T, pcap []gopacket.Packet) {
+	var foundSYN, foundSYNACK, foundACK bool
+
+	for _, packet := range pcap {
+		tcpLayer := packet.Layer(layers.LayerTypeTCP)
+		ipv4Layer := packet.Layer(layers.LayerTypeIPv4)
+		ipv6Layer := packet.Layer(layers.LayerTypeIPv6)
+		if tcpLayer == nil || (ipv4Layer == nil && ipv6Layer == nil) {
+			continue
+		}
+		tcp, _ := tcpLayer.(*layers.TCP)
+		var srcIP, dstIP net.IP
+		if ipv4Layer != nil {
+			srcIP = ipv4Layer.(*layers.IPv4).SrcIP
+			dstIP = ipv4Layer.(*layers.IPv4).SrcIP
+		}
+		if ipv6Layer != nil {
+			srcIP = ipv6Layer.(*layers.IPv6).SrcIP
+			dstIP = ipv6Layer.(*layers.IPv6).SrcIP
+		}
+
+		// SYN packet from client to server
+		if tcp.SYN && !tcp.ACK && tcp.DstPort == 443 {
+			t.Logf("Found SYN to port 443: %s:%d -> %s:%d",
+				srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
+			foundSYN = true
+		}
+
+		// SYN-ACK packet from server to client
+		if tcp.SYN && tcp.ACK && tcp.SrcPort == 443 {
+			t.Logf("Found SYN-ACK from port 443: %s:%d -> %s:%d",
+				srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
+			foundSYNACK = true
+		}
+
+		// Final ACK completing the handshake
+		if !foundACK && !tcp.SYN && tcp.ACK && tcp.DstPort == 443 {
+			t.Logf("Found ACK to port 443: %s:%d -> %s:%d",
+				srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
+			foundACK = true
+		}
+	}
+
+	if !foundSYN {
+		t.Error("Did not find SYN packet to port 443")
+	}
+	if !foundSYNACK {
+		t.Error("Did not find SYN-ACK packet from port 443")
+	}
+	if !foundACK {
+		t.Error("Did not find final ACK to port 443")
+	}
+}
+
 func TestHTTPTracing(test *testing.T) {
+	defaultLink, err := getLinkForDefaultRoute()
+	if err != nil {
+		test.Skipf("Skipping test: no default route found (%v)", err)
+	}
+	rootUser := os.Geteuid() == 0
+	var withConntrackAcct bool
+	if rootUser {
+		fmt.Println("Running as root - will additionally test conntrack and pcap")
+		// Check if packet/byte conntrack accounting is enabled.
+		const conntrackAcctOpt = "/proc/sys/net/netfilter/nf_conntrack_acct"
+		data, err := os.ReadFile(conntrackAcctOpt)
+		if err != nil {
+			fmt.Printf("Failed to read conntrack accounting setting: %v\n", err)
+		} else if strings.TrimSpace(string(data)) == "1" {
+			fmt.Printf("%s is enabled, will check packet/byte counters recorded by conntrack\n",
+				conntrackAcctOpt)
+			withConntrackAcct = true
+		}
+	}
 	startTime := time.Now()
 	t := NewWithT(test)
 
@@ -41,6 +116,12 @@ func TestHTTPTracing(test *testing.T) {
 		},
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
+	}
+	if rootUser {
+		opts = append(opts, &nettrace.WithConntrack{})
+		opts = append(opts, &nettrace.WithPacketCapture{
+			Interfaces: []string{defaultLink.Attrs().Name},
+		})
 	}
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
@@ -65,9 +146,23 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(body.String()).To(ContainSubstring("<html>"))
 	t.Expect(body.String()).To(ContainSubstring("</html>"))
 
+	if rootUser {
+		// Give pcap some time to complete capture of all the packets.
+		time.Sleep(3 * time.Second)
+	}
 	trace, pcap, err := client.GetTrace("GET www.example.com over HTTPS")
 	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(pcap).To(BeEmpty())
+	if rootUser {
+		t.Expect(pcap).To(HaveLen(1))
+		t.Expect(pcap[0].InterfaceName).To(Equal(defaultLink.Attrs().Name))
+		t.Expect(pcap[0].WithTCPPayload).To(BeTrue())
+		t.Expect(pcap[0].Packets).ToNot(BeEmpty())
+		// Most of the captured packets are encrypted with TLS, but we can at least
+		// check that TCP handshake is included in the trace.
+		checkCapturedTCPHandshakeForHTTPS(test, pcap[0].Packets)
+	} else {
+		t.Expect(pcap).To(BeEmpty())
+	}
 
 	t.Expect(trace.Description).To(Equal("GET www.example.com over HTTPS"))
 	t.Expect(trace.TraceBeginAt.IsRel).To(BeFalse())
@@ -142,7 +237,24 @@ func TestHTTPTracing(test *testing.T) {
 			relTimeIsInBetween(t, socketOp.CallAt, udpConn.SocketCreateAt, udpConn.ConnCloseAt)
 			relTimeIsInBetween(t, socketOp.ReturnAt, socketOp.CallAt, udpConn.ConnCloseAt)
 		}
-		t.Expect(udpConn.Conntract).To(BeNil()) // WithConntrack requires root privileges
+		if rootUser {
+			t.Expect(udpConn.Conntract).ToNot(BeNil())
+			if withConntrackAcct {
+				t.Expect(udpConn.Conntract.PacketsRecv).ToNot(BeZero())
+				t.Expect(udpConn.Conntract.PacketsSent).ToNot(BeZero())
+				t.Expect(udpConn.Conntract.BytesRecv).ToNot(BeZero())
+				t.Expect(udpConn.Conntract.BytesSent).ToNot(BeZero())
+			}
+			t.Expect(udpConn.Conntract.AddrOrig.DstPort).To(BeEquivalentTo(53))
+			t.Expect(udpConn.Conntract.AddrReply.SrcPort).To(BeEquivalentTo(53))
+			relTimeIsInBetween(t, udpConn.Conntract.CapturedAt, traceBeginAsRel, trace.TraceEndAt)
+			status := uint32(udpConn.Conntract.Status)
+			t.Expect(status & nettrace.ConntrackFlags["seen-reply"]).ToNot(BeZero())
+			t.Expect(status & nettrace.ConntrackFlags["confirmed"]).ToNot(BeZero())
+		} else {
+			// WithConntrack requires root privileges
+			t.Expect(udpConn.Conntract).To(BeNil())
+		}
 		t.Expect(udpConn.TotalRecvBytes).ToNot(BeZero())
 		t.Expect(udpConn.TotalSentBytes).ToNot(BeZero())
 	}
@@ -187,7 +299,25 @@ func TestHTTPTracing(test *testing.T) {
 		t.Expect(net.ParseIP(tcpConn.AddrTuple.DstIP)).ToNot(BeNil())
 		t.Expect(tcpConn.AddrTuple.SrcPort).ToNot(BeZero()) // TODO: this may fail for IPv6
 		t.Expect(tcpConn.AddrTuple.DstPort).ToNot(BeZero())
-		t.Expect(tcpConn.Conntract).To(BeNil()) // WithConntrack requires root privileges
+		if rootUser {
+			t.Expect(tcpConn.Conntract).ToNot(BeNil())
+			if withConntrackAcct {
+				t.Expect(tcpConn.Conntract.PacketsRecv).ToNot(BeZero())
+				t.Expect(tcpConn.Conntract.PacketsSent).ToNot(BeZero())
+				t.Expect(tcpConn.Conntract.BytesRecv).ToNot(BeZero())
+				t.Expect(tcpConn.Conntract.BytesSent).ToNot(BeZero())
+			}
+			t.Expect(tcpConn.Conntract.AddrOrig.DstPort).To(BeEquivalentTo(443))
+			t.Expect(tcpConn.Conntract.AddrReply.SrcPort).To(BeEquivalentTo(443))
+			relTimeIsInBetween(t, tcpConn.Conntract.CapturedAt, traceBeginAsRel, trace.TraceEndAt)
+			status := uint32(tcpConn.Conntract.Status)
+			t.Expect(status & nettrace.ConntrackFlags["seen-reply"]).ToNot(BeZero())
+			t.Expect(status & nettrace.ConntrackFlags["confirmed"]).ToNot(BeZero())
+			t.Expect(tcpConn.Conntract.TCPState).To(Equal(nettrace.TCPStateClose))
+		} else {
+			// WithConntrack requires root privileges
+			t.Expect(tcpConn.Conntract).To(BeNil())
+		}
 		if tcpConn.TraceID != usedTCPConn.TraceID {
 			// Not used for HTTP request in the end.
 			continue

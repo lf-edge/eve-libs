@@ -46,8 +46,8 @@ func setupTests(t *testing.T) (*S3ctx, string, string, bool) {
 	region := getEnvOrSkip(t, "AWS_REGION")
 	_, useIPv6 := os.LookupEnv("AWS_USE_IPV6")
 
-	// Initialize a real S3ctx
-	s, err := NewAwsCtx(accessKey, secretKey, region, useIPv6, nil)
+	// Initialize a real S3ctx in AWS
+	s, err := NewAwsCtx(accessKey, secretKey, region, useIPv6, "", nil)
 	if err != nil {
 		t.Fatalf("NewAwsCtx failed: %v", err)
 	}

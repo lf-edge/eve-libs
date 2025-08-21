@@ -1,0 +1,6 @@
+#
+# https://github.com/codespell-project/codespell
+#
+
+[codespell]
+skip = ./.git/*,*/vendor/*,go.sum,go.mod

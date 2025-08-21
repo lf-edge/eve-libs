@@ -38,7 +38,7 @@ type S3ctx struct {
 }
 
 // NewAwsCtx initializes AWS S3 context using SDK v2
-func NewAwsCtx(id, secret, region string, useIPv6 bool, hctx *http.Client) (*S3ctx, error) {
+func NewAwsCtx(id, secret, region string, useIPv6 bool, endpointOverride string, hctx *http.Client) (*S3ctx, error) {
 	ctx := context.Background()
 	logger := logrus.New()
 	logger.SetLevel(logrus.TraceLevel)
@@ -65,7 +65,20 @@ func NewAwsCtx(id, secret, region string, useIPv6 bool, hctx *http.Client) (*S3c
 		cfg.HTTPClient = hctx
 	}
 
-	client := s3.NewFromConfig(cfg)
+	client := s3.NewFromConfig(cfg,
+		func(o *s3.Options) {
+			// make sure SDK still signs with our desired region
+			o.Region = region
+
+			if endpointOverride != "" {
+				// point every S3 call at this base URL
+				o.BaseEndpoint = aws.String(endpointOverride)
+				// Most S3 compatible datastore require path‐style rather than virtual‐host
+				o.UsePathStyle = true
+			}
+		},
+	)
+
 	// Presigner for generating pre-signed URLs
 	presigner := s3.NewPresignClient(client)
 

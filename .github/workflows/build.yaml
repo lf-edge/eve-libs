@@ -25,6 +25,11 @@ jobs:
     env:
         GOOS: ${{ matrix.target.os }}
         GOARCH: ${{ matrix.target.arch }}
+        TEST_AZURE_ACCOUNT_URL: ${{ secrets.TEST_AZURE_ACCOUNT_URL }}
+        TEST_AZURE_ACCOUNT_NAME: ${{ secrets.TEST_AZURE_ACCOUNT_NAME }}
+        TEST_AZURE_ACCOUNT_KEY: ${{ secrets.TEST_AZURE_ACCOUNT_KEY }}
+        TEST_AZURE_CONTAINER: ${{ vars.TEST_AZURE_CONTAINER }}
+        TEST_AZURE_BLOB_PREFIX: ${{ vars.TEST_AZURE_BLOB_PREFIX }}
     runs-on: ubuntu-latest
     steps:
       - name: checkout

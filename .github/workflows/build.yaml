@@ -44,3 +44,7 @@ jobs:
         # build binaries and run them to test; sufficient to run on native arch
         if: matrix.target.arch == 'amd64' && matrix.target.os == 'linux'
         run: go test ./... -v -race
+      - name: test (integration - MinIO)
+        # build binaries and run them to test; sufficient to run on native arch
+        if: matrix.target.arch == 'amd64' && matrix.target.os == 'linux'
+        run: go test -tags=integration ./... -v -race

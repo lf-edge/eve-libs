@@ -30,6 +30,10 @@ jobs:
         TEST_AZURE_ACCOUNT_KEY: ${{ secrets.TEST_AZURE_ACCOUNT_KEY }}
         TEST_AZURE_CONTAINER: ${{ vars.TEST_AZURE_CONTAINER }}
         TEST_AZURE_BLOB_PREFIX: ${{ vars.TEST_AZURE_BLOB_PREFIX }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
+        AWS_TEST_BUCKET: ${{ vars.AWS_TEST_BUCKET }}
     runs-on: ubuntu-latest
     steps:
       - name: checkout

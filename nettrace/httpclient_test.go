@@ -370,7 +370,7 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(err).ToNot(HaveOccurred())
 	err = resp.Body.Close()
 	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(body.String()).To(ContainSubstring("<html>"))
+	t.Expect(body.String()).To(ContainSubstring("<html"))
 	t.Expect(body.String()).To(ContainSubstring("</html>"))
 
 	if rootUser {
@@ -1164,7 +1164,7 @@ func TestWithSourceIP(test *testing.T) {
 	t.Expect(err).ToNot(HaveOccurred())
 	err = resp.Body.Close()
 	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(body.String()).To(ContainSubstring("<html>"))
+	t.Expect(body.String()).To(ContainSubstring("<html"))
 	t.Expect(body.String()).To(ContainSubstring("</html>"))
 
 	trace, pcap, err := client.GetTrace("GET www.example.com with source IP set")

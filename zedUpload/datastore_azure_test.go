@@ -192,7 +192,7 @@ func testAzureBlobWithFile(t *testing.T, objloc string, objkey string) error {
 		return err
 	}
 	if remoteFileMD5 != localFileMD5 {
-		return fmt.Errorf("upload md5 didn't match %v - %v", remoteFileMD5, localFileMD5)
+		return fmt.Errorf("upload md5 didn't match %s - %s", remoteFileMD5, localFileMD5)
 	}
 	statusDownload, msgDownload := operationAzureBlob(t, azureDownloadDir+objkey, objkey, zedUpload.SyncOpDownload)
 	if statusDownload {
@@ -275,13 +275,13 @@ func testAzureBlobDatastoreAPI(t *testing.T) {
 		}
 	})
 	t.Run("List=1", func(t *testing.T) {
-		status, msg := listAzureBlobFiles(t, "zedtest123")
+		status, msg := listAzureBlobFiles(t, azureContainer)
 		if status {
 			t.Errorf("%v", msg)
 		}
 	})
 	t.Run("List=2", func(t *testing.T) {
-		status, msg := listAzureBlobFiles(t, "zedtest123")
+		status, msg := listAzureBlobFiles(t, azureContainer)
 		if status {
 			t.Errorf("%v", msg)
 		}
@@ -305,7 +305,7 @@ func testAzureBlobDatastoreAPI(t *testing.T) {
 		}
 	})
 	t.Run("List=2", func(t *testing.T) {
-		status, msg := listAzureBlobFiles(t, "zedtest123")
+		status, msg := listAzureBlobFiles(t, azureContainer)
 		if status {
 			t.Errorf("%v", msg)
 		}

@@ -29,6 +29,9 @@ func TestSFTPDatastore(t *testing.T) {
 	if err := os.MkdirAll(sftpDownloadDir, 0755); err != nil {
 		t.Fatalf("unable to make download directory: %v", err)
 	}
+	if err := os.MkdirAll(nettraceFolder, 0755); err != nil {
+		t.Fatalf("unable to make nettrace log directory: %v", err)
+	}
 	if sftpDir != "" && uname != "" && pass != "" && sftpRegion != "" {
 		t.Run("API", testSFTPDatastoreAPI)
 		t.Run("Negative", testSFTPDatastoreNegative)
@@ -46,7 +49,7 @@ func operationSFTP(t *testing.T, objloc string, objkey string, operation zedUplo
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, sftpDir, sftpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, nettraceFolder, sftpDir, sftpAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(operation, objkey, objloc, 0, true, respChan)
@@ -79,7 +82,7 @@ func operationSFTPNegative(t *testing.T, sftpName string, sftpPass string, opera
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, sftpDir, sftpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, nettraceFolder, sftpDir, sftpAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(operation, "sftpteststuff", sftpUploadFile, 0, true, respChan)
@@ -112,7 +115,7 @@ func listSFTPFiles(t *testing.T, path string) (bool, string) {
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, path, sftpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, nettraceFolder, path, sftpAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(zedUpload.SyncOpList, "", "", 0, true, respChan)
@@ -145,7 +148,7 @@ func getSFTPObjectMetaData(t *testing.T, objloc string, objkey string) (bool, st
 	}
 
 	// create Endpoint
-	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, sftpDir, sftpAuth)
+	dEndPoint, err := ctx.NewSyncerDest(zedUpload.SyncSftpTr, sftpRegion, nettraceFolder, sftpDir, sftpAuth)
 	if err == nil && dEndPoint != nil {
 		// create Request
 		req := dEndPoint.NewRequest(zedUpload.SyncOpGetObjectMetaData, objkey, objloc, 0, true, respChan)

@@ -43,26 +43,24 @@ func NewAwsCtx(id, secret, region string, useIPv6 bool, endpointOverride string,
 	logger := logrus.New()
 	logger.SetLevel(logrus.TraceLevel)
 
-	// Enable dual-stack (IPv4 + IPv6) endpoint if IPv6 is in use.
-	dualStackState := aws.DualStackEndpointStateUnset
-	if useIPv6 {
-		dualStackState = aws.DualStackEndpointStateEnabled
-	}
-	// Load config with static credentials
-	cfg, err := awsConfig.LoadDefaultConfig(ctx,
+	cfgOpts := []func(*awsConfig.LoadOptions) error{
 		awsConfig.WithRegion(region),
-		awsConfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(id, secret, ""),
-		),
-		awsConfig.WithUseDualStackEndpoint(dualStackState),
-	)
-	if err != nil {
-		return nil, err
+		awsConfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(id, secret, "")),
 	}
 
 	// Override HTTP client if provided
 	if hctx != nil {
-		cfg.HTTPClient = hctx
+		cfgOpts = append(cfgOpts, awsConfig.WithHTTPClient(hctx))
+	}
+
+	// Enable dual-stack (IPv4 + IPv6) endpoint if IPv6 is in use and we do not use a custom endpoint
+	if endpointOverride == "" && useIPv6 {
+		cfgOpts = append(cfgOpts, awsConfig.WithUseDualStackEndpoint(aws.DualStackEndpointStateEnabled))
+	}
+
+	cfg, err := awsConfig.LoadDefaultConfig(ctx, cfgOpts...)
+	if err != nil {
+		return nil, err
 	}
 
 	client := s3.NewFromConfig(cfg,

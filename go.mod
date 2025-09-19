@@ -50,6 +50,7 @@ require (
 	golang.org/x/crypto v0.41.0
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.248.0
+	go.etcd.io/bbolt v1.3.5
 )
 
 require (

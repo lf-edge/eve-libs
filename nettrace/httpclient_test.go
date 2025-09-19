@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/google/uuid"
 	"github.com/lf-edge/eve-libs/nettrace"
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
@@ -123,11 +124,13 @@ func TestHTTPTracing(test *testing.T) {
 			Interfaces: []string{defaultLink.Attrs().Name},
 		})
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
 		ReqTimeout:       5 * time.Second,
 		DisableKeepAlive: true,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://www.example.com", nil)
@@ -385,10 +388,12 @@ func TestTLSCertErrors(test *testing.T) {
 	opts := []nettrace.TraceOpt{
 		&nettrace.WithHTTPReqTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2: true,
 		ReqTimeout:  5 * time.Second,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	// Expired certificate
@@ -471,9 +476,11 @@ func TestNonExistentHost(test *testing.T) {
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		ReqTimeout: 5 * time.Second,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://non-existent-host.com", nil)
@@ -594,9 +601,11 @@ func TestUnresponsiveDest(test *testing.T) {
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		ReqTimeout: 5 * time.Second,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://198.51.100.100", nil)
@@ -688,9 +697,11 @@ func TestReusedTCPConn(test *testing.T) {
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		DisableKeepAlive: false, // allow TCP conn to be reused between HTTP requests
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	// First GET request
@@ -810,11 +821,13 @@ func TestAllNameserversSkipped(test *testing.T) {
 		&nettrace.WithHTTPReqTrace{},
 		&nettrace.WithDNSQueryTrace{},
 	}
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		SkipNameserver: func(ipAddr net.IP, port uint16) (skip bool, reason string) {
 			return true, "skipping any configured nameserver"
 		},
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://www.example.com", nil)
@@ -904,12 +917,14 @@ func TestWithSourceIP(test *testing.T) {
 	}
 	sourceIP := getSourceIPForDefaultRoute(test)
 	fmt.Println(sourceIP)
+
+	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
 		ReqTimeout:       5 * time.Second,
 		DisableKeepAlive: true,
 		SourceIP:         sourceIP,
-	}, opts...)
+	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
 	req, err := http.NewRequest("GET", "https://www.example.com", nil)

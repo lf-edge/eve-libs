@@ -493,6 +493,158 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 	}
 }
 
+func TestHTTPDatastoreResume(t *testing.T) {
+	if err := setup(); err != nil {
+		t.Fatalf("setup error: %v", err)
+	}
+	if err := os.MkdirAll(httpDownloadDir, 0755); err != nil {
+		t.Fatalf("unable to make download directory: %v", err)
+	}
+	if err := os.MkdirAll(nettraceFolder, 0755); err != nil {
+		t.Fatalf("unable to make nettrace log directory: %v", err)
+	}
+	defer os.RemoveAll(nettraceFolder)
+
+	const totalSize = 1024 * 1024 * 50 // 50 MiB
+	const preSize = 1024 * 1024 * 20   // 20 MiB already downloaded
+
+	// Helper to create server + source file
+	makeServerAndFile := func(ignoreRange bool) (ts *httptest.Server, tempDir, filename, infile string, inHash string, cleanup func(), err error) {
+		tempDir = t.TempDir()
+
+		filename = "big.bin"
+		infile = filepath.Join(tempDir, filename)
+		_, inHash, e := createRandomFile(infile, totalSize)
+		if e != nil {
+			err = fmt.Errorf("unable to create random file %s: %v", infile, e)
+			return nil, "", "", "", "", nil, err
+		}
+
+		r := chi.NewRouter()
+		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+			path := filepath.Join(tempDir, r.URL.Path)
+			f, e := os.Open(path)
+			if e != nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			defer f.Close()
+
+			// Serve with or without range support
+			if ignoreRange {
+				// deliberately ignore client's Range
+				r.Header.Del("Range")
+			}
+			http.ServeContent(w, r, filepath.Base(path), time.Now(), f)
+		})
+		ts = httptest.NewServer(r)
+
+		cleanup = func() {
+			ts.Close()
+			_ = os.Remove(infile)
+		}
+		return
+	}
+
+	// Pre-create partial local file (simulate previous interrupted run)
+	makePartialLocal := func(target, src string, n int64) error {
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		sf, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer sf.Close()
+		df, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		defer df.Close()
+		_, err = io.CopyN(df, sf, n)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Range-capable server (206) — should request bytes=preSize- and finish
+	t.Run("ResumeWithRangeServer", func(t *testing.T) {
+		ts, _, filename, infile, inHash, cleanup, err := makeServerAndFile(false)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		defer cleanup()
+
+		target := filepath.Join(httpDownloadDir, "resume-range.bin")
+		defer os.Remove(target)
+
+		if err := makePartialLocal(target, infile, preSize); err != nil {
+			t.Fatalf("prep partial local: %v", err)
+		}
+
+		// Download should resume and complete
+		status, msg := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", filename, target, false)
+		if status {
+			t.Fatalf("resume download failed: %v", msg)
+		}
+
+		// Verify size and hash
+		st, err := os.Stat(target)
+		if err != nil {
+			t.Fatalf("stat target: %v", err)
+		}
+		if st.Size() != int64(totalSize) {
+			t.Fatalf("expected %d bytes, got %d", totalSize, st.Size())
+		}
+		outHash, err := sha256File(target)
+		if err != nil {
+			t.Fatalf("hash target: %v", err)
+		}
+		if outHash != inHash {
+			t.Fatalf("hash mismatch: src %s dst %s", inHash, outHash)
+		}
+	})
+
+	// Server ignores Range (always 200) — client should discard preSize and still produce a correct file
+	t.Run("ResumeNoRangeServer_DiscardPrefix", func(t *testing.T) {
+		ts, _, filename, infile, inHash, cleanup, err := makeServerAndFile(true /* ignoreRange */)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		defer cleanup()
+
+		target := filepath.Join(httpDownloadDir, "resume-norange.bin")
+		defer os.Remove(target)
+
+		if err := makePartialLocal(target, infile, preSize); err != nil {
+			t.Fatalf("prep partial local: %v", err)
+		}
+
+		// Download should "resume" by discarding preSize from body and appending remainder
+		status, msg := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", filename, target, false)
+		if status {
+			t.Fatalf("resume download failed: %v", msg)
+		}
+
+		// Verify size and hash
+		st, err := os.Stat(target)
+		if err != nil {
+			t.Fatalf("stat target: %v", err)
+		}
+		if st.Size() != int64(totalSize) {
+			t.Fatalf("expected %d bytes, got %d", totalSize, st.Size())
+		}
+		outHash, err := sha256File(target)
+		if err != nil {
+			t.Fatalf("hash target: %v", err)
+		}
+		if outHash != inHash {
+			t.Fatalf("hash mismatch: src %s dst %s", inHash, outHash)
+		}
+	})
+}
+
 func sha256File(filePath string) (string, error) {
 	hasher := sha256.New()
 	f, err := os.Open(filePath)

@@ -1,6 +1,6 @@
 module github.com/lf-edge/eve-libs
 
-go 1.23.0
+go 1.24.0
 
 require github.com/onsi/gomega v1.24.2
 
@@ -12,8 +12,8 @@ require (
 	github.com/packetcap/go-pcap v0.0.0-20230717110547-c34843f9206d
 	github.com/sirupsen/logrus v1.9.3
 	github.com/ti-mo/conntrack v0.5.3-0.20250707093024-c0d46dc6bcc8
-	golang.org/x/net v0.43.0
-	golang.org/x/sys v0.35.0
+	golang.org/x/net v0.47.0
+	golang.org/x/sys v0.38.0
 )
 
 require (
@@ -24,8 +24,8 @@ require (
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/ti-mo/netfilter v0.5.3 // indirect
-	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/text v0.28.0
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/text v0.31.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -46,11 +46,11 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.38.0
 	github.com/vishvananda/netlink v1.3.1
+	go.etcd.io/bbolt v1.3.5
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.41.0
+	golang.org/x/crypto v0.45.0
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.248.0
-	go.etcd.io/bbolt v1.3.5
 )
 
 require (

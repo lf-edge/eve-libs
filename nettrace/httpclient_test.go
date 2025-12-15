@@ -579,8 +579,8 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(tlsTun.PeerCerts).To(HaveLen(2))
 	peerCert := tlsTun.PeerCerts[0]
 	t.Expect(peerCert.IsCA).To(BeFalse())
-	t.Expect(peerCert.Subject).To(Equal("CN=*.example.com,O=Internet Corporation for Assigned Names and Numbers,L=Los Angeles,ST=California,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1,O=DigiCert Inc,C=US"))
+	t.Expect(peerCert.Subject).To(Equal("CN=example.com,O=Internet Corporation For Assigned Names and Numbers,ST=California,C=US"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=Sectigo Public Server Authentication CA OV R36,O=Sectigo Limited,C=GB"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
 	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
@@ -589,8 +589,8 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
 	peerCert = tlsTun.PeerCerts[1]
 	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Subject).To(Equal("CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1,O=DigiCert Inc,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=DigiCert Global Root G3,OU=www.digicert.com,O=DigiCert Inc,C=US"))
+	t.Expect(peerCert.Subject).To(Equal("CN=Sectigo Public Server Authentication CA OV R36,O=Sectigo Limited,C=GB"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=Sectigo Public Server Authentication Root R46,O=Sectigo Limited,C=GB"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
 	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())

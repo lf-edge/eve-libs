@@ -1,4 +1,4 @@
-// Copyright (c) 2022 Zededa, Inc.
+// Copyright (c) 2022,2025 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 package reconciler_test
@@ -2846,4 +2846,152 @@ func perfTest(_ *testing.B, numOfItems int) error {
 	r := rec.New(reg)
 	status = r.Reconcile(context.Background(), nil, intent)
 	return status.Err
+}
+
+// Items: A, B, C, D
+// Dependencies: B->A, C->A, D->A
+// B, C, D are deleted asynchronously.
+//
+// This test covers a previously buggy scenario where dependents (B, C, D)
+// could be re-created before their dependency (A) was re-created.
+// That behavior caused B, C, and D to be repeatedly deleted and re-created,
+// resulting in an infinite reconciliation loop and breaking eventual consistency.
+func TestRecreateWithDepsDeletedAsynchronously(test *testing.T) {
+	t := NewGomegaWithT(test)
+
+	itemA := mockItem{
+		name:     "A",
+		itemType: "type1",
+	}
+	itemB := mockItem{
+		name:     "B",
+		itemType: "type2",
+		deps: []dg.Dependency{
+			{
+				RequiredItem: dg.ItemRef{
+					ItemType: "type1",
+					ItemName: "A",
+				},
+			},
+		},
+		asyncDelete: true,
+	}
+	itemC := mockItem{
+		name:     "C",
+		itemType: "type2",
+		deps: []dg.Dependency{
+			{
+				RequiredItem: dg.ItemRef{
+					ItemType: "type1",
+					ItemName: "A",
+				},
+			},
+		},
+		asyncDelete: true,
+	}
+	itemD := mockItem{
+		name:     "D",
+		itemType: "type2",
+		deps: []dg.Dependency{
+			{
+				RequiredItem: dg.ItemRef{
+					ItemType: "type1",
+					ItemName: "A",
+				},
+			},
+		},
+		asyncDelete: true,
+	}
+
+	reg := &rec.DefaultRegistry{}
+	t.Expect(addConfigurator(reg, "type1")).To(Succeed())
+	t.Expect(addConfigurator(reg, "type2")).To(Succeed())
+
+	// 1. Create all items successfully.
+	intent := dg.New(dg.InitArgs{
+		Name:        "TestGraph",
+		Description: "Graph for testing",
+		Items: []dg.Item{
+			itemA, itemB, itemC, itemD,
+		},
+	})
+
+	r := rec.New(reg)
+	status = r.Reconcile(context.Background(), nil, intent)
+	t.Expect(status.Err).To(BeNil())
+	t.Expect(status.Err).To(BeNil())
+	t.Expect(status.AsyncOpsInProgress).To(BeFalse())
+	t.Expect(itemA).To(BeCreated())
+	t.Expect(itemB).To(BeCreated().After(itemA).IsCreated())
+	t.Expect(itemC).To(BeCreated().After(itemA).IsCreated())
+	t.Expect(itemD).To(BeCreated().After(itemA).IsCreated())
+	t.Expect(status.OperationLog).To(HaveLen(4))
+	t.Expect(status.NewCurrentState).ToNot(BeNil())
+	current := status.NewCurrentState
+
+	// Trigger re-create of itemA.
+	// But first, all the items that depend on A must be deleted.
+	itemA.staticAttrs.strAttr = "modified"
+	intent.PutItem(itemA, nil)
+
+	// NOTE:
+	// The reconciliation algorithm currently does not trigger asynchronous
+	// deletes of B, C, and D concurrently in this scenario.
+	// Instead, deletes are issued one at a time.
+	//
+	// This could be optimized in the future, but doing so would add
+	// significant complexity and is outside the scope of this test.
+
+	// First asynchronous delete is triggered.
+	r = rec.New(reg)
+	status = r.Reconcile(context.Background(), current, intent)
+	t.Expect(status.Err).To(BeNil())
+	t.Expect(status.AsyncOpsInProgress).To(BeTrue())
+	t.Expect(status.ReadyToResume).ToNot(BeNil())
+	t.Expect(status.OperationLog).To(HaveLen(1))
+	t.Expect(status.OperationLog[0].Operation).To(Equal(rec.OperationDelete))
+	t.Expect(status.OperationLog[0].InProgress).To(BeTrue())
+	t.Expect(status.NewCurrentState).To(BeIdenticalTo(current))
+
+	// First delete completes; second asynchronous delete is triggered.
+	waitForAsyncOps(t, 1)
+	status = r.Reconcile(context.Background(), current, intent)
+	t.Expect(status.Err).To(BeNil())
+	t.Expect(status.AsyncOpsInProgress).To(BeTrue())
+	t.Expect(status.ReadyToResume).ToNot(BeNil())
+	t.Expect(status.OperationLog).To(HaveLen(2))
+	t.Expect(status.OperationLog[0].Operation).To(Equal(rec.OperationDelete))
+	t.Expect(status.OperationLog[0].InProgress).To(BeFalse())
+	t.Expect(status.OperationLog[1].Operation).To(Equal(rec.OperationDelete))
+	t.Expect(status.OperationLog[1].InProgress).To(BeTrue())
+	t.Expect(status.NewCurrentState).To(BeIdenticalTo(current))
+
+	// Second delete completes; third asynchronous delete is triggered.
+	waitForAsyncOps(t, 1)
+	status = r.Reconcile(context.Background(), current, intent)
+	t.Expect(status.Err).To(BeNil())
+	t.Expect(status.AsyncOpsInProgress).To(BeTrue())
+	t.Expect(status.ReadyToResume).ToNot(BeNil())
+	t.Expect(status.OperationLog).To(HaveLen(2))
+	t.Expect(status.OperationLog[0].Operation).To(Equal(rec.OperationDelete))
+	t.Expect(status.OperationLog[0].InProgress).To(BeFalse())
+	t.Expect(status.OperationLog[1].Operation).To(Equal(rec.OperationDelete))
+	t.Expect(status.OperationLog[1].InProgress).To(BeTrue())
+	t.Expect(status.NewCurrentState).To(BeIdenticalTo(current))
+
+	// Final asynchronous delete completes.
+	// Immediately afterward, item A is re-created, followed by
+	// re-creation of its dependents B, C, and D.
+	waitForAsyncOps(t, 1)
+	r = rec.New(reg)
+	status = r.Reconcile(context.Background(), current, intent)
+	t.Expect(status.Err).To(BeNil())
+	t.Expect(status.AsyncOpsInProgress).To(BeFalse())
+	t.Expect(status.ReadyToResume).To(BeNil())
+	t.Expect(itemA).To(BeRecreated())
+	t.Expect(itemB).To(BeCreated().After(itemA).IsRecreated())
+	t.Expect(itemC).To(BeCreated().After(itemA).IsRecreated())
+	t.Expect(itemD).To(BeCreated().After(itemA).IsRecreated())
+	t.Expect(status.OperationLog).To(HaveLen(6))
+	t.Expect(status.NewCurrentState).To(BeIdenticalTo(current))
 }

@@ -143,7 +143,7 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(err).ToNot(HaveOccurred())
 	err = resp.Body.Close()
 	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(body.String()).To(ContainSubstring("<html>"))
+	t.Expect(body.String()).To(ContainSubstring("<html"))
 	t.Expect(body.String()).To(ContainSubstring("</html>"))
 
 	if rootUser {
@@ -349,11 +349,11 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(tlsTun.ServerName).To(Equal("www.example.com"))
 	t.Expect(tlsTun.NegotiatedProto).To(Equal("h2"))
 	t.Expect(tlsTun.CipherSuite).ToNot(BeZero())
-	t.Expect(tlsTun.PeerCerts).To(HaveLen(2))
+	t.Expect(tlsTun.PeerCerts).To(HaveLen(4))
 	peerCert := tlsTun.PeerCerts[0]
 	t.Expect(peerCert.IsCA).To(BeFalse())
-	t.Expect(peerCert.Subject).To(Equal("CN=*.example.com,O=Internet Corporation for Assigned Names and Numbers,L=Los Angeles,ST=California,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1,O=DigiCert Inc,C=US"))
+	t.Expect(peerCert.Subject).To(Equal("CN=example.com"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=Cloudflare TLS Issuing ECC CA 3,O=SSL Corporation,C=US"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
 	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
@@ -362,8 +362,28 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
 	peerCert = tlsTun.PeerCerts[1]
 	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Subject).To(Equal("CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1,O=DigiCert Inc,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=DigiCert Global Root G3,OU=www.digicert.com,O=DigiCert Inc,C=US"))
+	t.Expect(peerCert.Subject).To(Equal("CN=Cloudflare TLS Issuing ECC CA 3,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=SSL.com TLS Transit ECC CA R2,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
+	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
+	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
+	t.Expect(peerCert.NotAfter.IsRel).To(BeFalse())
+	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
+	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
+	peerCert = tlsTun.PeerCerts[2]
+	t.Expect(peerCert.IsCA).To(BeTrue())
+	t.Expect(peerCert.Subject).To(Equal("CN=SSL.com TLS Transit ECC CA R2,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=SSL.com TLS ECC Root CA 2022,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
+	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
+	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
+	t.Expect(peerCert.NotAfter.IsRel).To(BeFalse())
+	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
+	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
+	peerCert = tlsTun.PeerCerts[3]
+	t.Expect(peerCert.IsCA).To(BeTrue())
+	t.Expect(peerCert.Subject).To(Equal("CN=SSL.com TLS ECC Root CA 2022,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=AAA Certificate Services,O=Comodo CA Limited,L=Salford,ST=Greater Manchester,C=GB"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
 	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
@@ -428,7 +448,8 @@ func TestTLSCertErrors(test *testing.T) {
 	t.Expect(peerCert.IsCA).To(BeFalse())
 	t.Expect(peerCert.Issuer).To(SatisfyAny(
 		Equal("CN=R10,O=Let's Encrypt,C=US"),
-		Equal("CN=R11,O=Let's Encrypt,C=US")))
+		Equal("CN=R11,O=Let's Encrypt,C=US"),
+		Equal("CN=R13,O=Let's Encrypt,C=US")))
 	t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com"))
 	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
 	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
@@ -927,7 +948,7 @@ func TestWithSourceIP(test *testing.T) {
 	t.Expect(err).ToNot(HaveOccurred())
 	err = resp.Body.Close()
 	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(body.String()).To(ContainSubstring("<html>"))
+	t.Expect(body.String()).To(ContainSubstring("<html"))
 	t.Expect(body.String()).To(ContainSubstring("</html>"))
 
 	trace, pcap, err := client.GetTrace("GET www.example.com with source IP set")

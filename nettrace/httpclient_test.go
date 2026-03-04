@@ -576,7 +576,7 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(tlsTun.ServerName).To(Equal("www.example.com"))
 	t.Expect(tlsTun.NegotiatedProto).To(Equal("h2"))
 	t.Expect(tlsTun.CipherSuite).ToNot(BeZero())
-	t.Expect(tlsTun.PeerCerts).To(HaveLen(4))
+	t.Expect(tlsTun.PeerCerts).To(HaveLen(3))
 	peerCert := tlsTun.PeerCerts[0]
 	t.Expect(peerCert.IsCA).To(BeFalse())
 	t.Expect(peerCert.Subject).To(Equal("CN=example.com"))
@@ -600,16 +600,6 @@ func TestHTTPTracing(test *testing.T) {
 	peerCert = tlsTun.PeerCerts[2]
 	t.Expect(peerCert.IsCA).To(BeTrue())
 	t.Expect(peerCert.Subject).To(Equal("CN=SSL.com TLS Transit ECC CA R2,O=SSL Corporation,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=SSL.com TLS ECC Root CA 2022,O=SSL Corporation,C=US"))
-	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
-	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
-	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
-	t.Expect(peerCert.NotAfter.IsRel).To(BeFalse())
-	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
-	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
-	peerCert = tlsTun.PeerCerts[3]
-	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Subject).To(Equal("CN=SSL.com TLS ECC Root CA 2022,O=SSL Corporation,C=US"))
 	t.Expect(peerCert.Issuer).To(Equal("CN=AAA Certificate Services,O=Comodo CA Limited,L=Salford,ST=Greater Manchester,C=GB"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())

@@ -580,7 +580,7 @@ func TestHTTPTracing(test *testing.T) {
 	peerCert := tlsTun.PeerCerts[0]
 	t.Expect(peerCert.IsCA).To(BeFalse())
 	t.Expect(peerCert.Subject).To(Equal("CN=example.com"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=Cloudflare TLS Issuing ECC CA 3,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.Issuer).To(Equal("CN=Cloudflare TLS Issuing ECC CA 1,O=CLOUDFLARE\\, INC.,C=US"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
 	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
@@ -589,7 +589,7 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
 	peerCert = tlsTun.PeerCerts[1]
 	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Subject).To(Equal("CN=Cloudflare TLS Issuing ECC CA 3,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.Subject).To(Equal("CN=Cloudflare TLS Issuing ECC CA 1,O=CLOUDFLARE\\, INC.,C=US"))
 	t.Expect(peerCert.Issuer).To(Equal("CN=SSL.com TLS Transit ECC CA R2,O=SSL Corporation,C=US"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())

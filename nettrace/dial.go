@@ -350,11 +350,11 @@ func parseHostAddr(address string) (ip net.IP, port uint16, err error) {
 	if ip.To4() != nil {
 		ip = ip.To4()
 	}
-	portInt, err := strconv.Atoi(portStr)
+	portUint64, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to parse port %s: %w", portStr, err)
 	}
-	return ip, uint16(portInt), nil
+	return ip, uint16(portUint64), nil
 }
 
 func stringListContains(list []string, item string) bool {

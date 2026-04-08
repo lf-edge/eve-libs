@@ -696,3 +696,29 @@ func createRandomFile(p string, size int) (int64, string, error) {
 	}
 	return actualSize, hash, nil
 }
+
+func TestSecureAuth(t *testing.T) {
+	ctx, err := zedUpload.NewDronaCtx("what is this parameter actually used for?", 0)
+	if ctx == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	url := "http://localhost:1234/"
+	remoteDir := "/foo"
+
+	httpAuth := &zedUpload.AuthInput{
+		AuthType: "",
+		Uname:    "Basic",
+		Password: "loremipsum",
+		Keys:     []string{},
+	}
+
+	_, err = ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, nettraceFolder, remoteDir, httpAuth)
+	if !errors.Is(err, zedUpload.ErrInsecureAuth) {
+		t.Fatal("insecure auth is not allowed, but no error was returned")
+	}
+	_, err = ctx.NewSyncerDest(zedUpload.SyncHttpTr, url, nettraceFolder, remoteDir, httpAuth, zedUpload.WithAllowInsecureAuth(true))
+	if err != nil {
+		t.Fatalf("didn't expect an error, but got %v", err)
+	}
+}

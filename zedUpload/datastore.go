@@ -4,9 +4,11 @@
 package zedUpload
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"sync"
 	"time"
 
@@ -153,6 +155,20 @@ func (ctx *DronaCtx) postResponse(req *DronaRequest, status error) {
 	req.result <- req
 }
 
+func isToken(str string) bool {
+	// https://datatracker.ietf.org/doc/html/rfc7230#section-3.2.6
+	rex := regexp.MustCompile(`^[a-zA-Z0-9-._~+/!#\$%&'\*\+^` + "`" + `|']*$`)
+
+	return rex.MatchString(str)
+}
+
+func isToken68(str string) bool {
+	// https://datatracker.ietf.org/doc/html/rfc7235#appendix-C
+	rex := regexp.MustCompile(`^[a-zA-Z0-9-._~+/]*=?$`)
+
+	return rex.MatchString(str)
+}
+
 type AuthInput struct {
 	// type of auth
 	AuthType string
@@ -201,7 +217,15 @@ func (ctx *DronaCtx) NewSyncerDest(tr SyncTransportType, UrlOrRegion, nettraceDi
 	case SyncHttpTr:
 		syncEp := &HttpTransportMethod{transport: tr, hurl: UrlOrRegion, path: PathOrBkt, ctx: ctx}
 		if auth != nil {
+			if !isToken(auth.Uname) {
+				return nil, errors.New("auth.Uname is not token-conform")
+			}
+			if !isToken68(auth.Password) {
+				return nil, errors.New("auth.Password is not token68-conform")
+			}
 			syncEp.authType = auth.AuthType
+			syncEp.uname = auth.Uname
+			syncEp.password = auth.Password
 		}
 		syncEp.hClientWrap = &httpClientWrapper{}
 		syncEp.hClientWrap.nettraceDirPath = nettraceDirPATH

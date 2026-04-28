@@ -447,13 +447,14 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 			unstableDelay     = 15 * time.Second // this just needs to be a little longer than the previous
 		)
 
+		tmpDir := t.TempDir()
+
 		// make a random file
-		infile := httpDownloadDir + "input"
+		infile := filepath.Join(tmpDir, "input")
 		inSize, inHash, err := createRandomFile(infile, 1024*1024*100)
 		if err != nil {
 			t.Fatalf("unable to create random file %v", err)
 		}
-		defer os.RemoveAll(infile)
 
 		// create the test server
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -467,7 +468,7 @@ func testHTTPDatastoreRepeat(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		outfile := filepath.Join(httpDownloadDir, "repeat2")
+		outfile := filepath.Join(tmpDir, "output")
 		status, msg := operationHTTP(t, zedUpload.SyncOpDownload, ts.URL, "", "path/does/not/matter/with/fixed/server", outfile, true, zedUpload.WithHTTPInactivityTimeout(inactivityTimeout))
 		if status {
 			t.Errorf("%v", msg)

@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/uuid"
@@ -312,6 +314,73 @@ func checkCapturedTCPHandshake(t *testing.T, pcap []gopacket.Packet, port layers
 	}
 }
 
+// startTestDNSServer starts a UDP DNS server on a random port that resolves
+// the given hostname to 127.0.0.1 (A record). Returns the "host:port" address
+// and a cleanup function.
+func startTestDNSServer(t *testing.T, hostname string) (addr string, cleanup func()) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen UDP for DNS server: %v", err)
+	}
+	fqdn := hostname + "."
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, raddr, err := conn.ReadFrom(buf)
+			if err != nil {
+				return // closed
+			}
+			var msg dnsmessage.Message
+			if err := msg.Unpack(buf[:n]); err != nil {
+				continue
+			}
+			resp := dnsmessage.Message{
+				Header: dnsmessage.Header{
+					ID:            msg.ID,
+					Response:      true,
+					Authoritative: true,
+					RCode:         dnsmessage.RCodeSuccess,
+				},
+				Questions: msg.Questions,
+			}
+			for _, q := range msg.Questions {
+				if q.Name.String() != fqdn {
+					resp.RCode = dnsmessage.RCodeNameError
+					continue
+				}
+				if q.Type == dnsmessage.TypeA {
+					resp.Answers = append(resp.Answers, dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{
+							Name:  q.Name,
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+							TTL:   60,
+						},
+						Body: &dnsmessage.AResource{A: [4]byte{127, 0, 0, 1}},
+					})
+				}
+				// AAAA queries get an empty (no-error) response.
+			}
+			packed, err := resp.Pack()
+			if err != nil {
+				continue
+			}
+			_, err = conn.WriteTo(packed, raddr)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}()
+	return conn.LocalAddr().String(), func() {
+		err := conn.Close()
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
 func TestHTTPTracing(test *testing.T) {
 	// Local HTTPS test server with HTTP/2 enabled.
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -333,11 +402,13 @@ func TestHTTPTracing(test *testing.T) {
 	}
 	srvPort, _ := strconv.Atoi(srvURL.Port())
 
-	// Use 127.0.0.1.nip.io as hostname: it resolves to 127.0.0.1 via real
-	// DNS, so we exercise the full DNS resolution path.
-	// The httptest cert has "example.com" as a SAN, so we set ServerName
-	// to match for TLS verification.
-	const srvHostname = "127.0.0.1.nip.io"
+	// Start a local DNS server that resolves our test hostname to 127.0.0.1.
+	// This exercises the full DNS resolution path without any external dependency.
+	// The httptest cert has "example.com" as a SAN, so we use that as both
+	// the DNS hostname and the TLS ServerName.
+	const srvHostname = "example.com"
+	dnsAddr, dnsCleanup := startTestDNSServer(test, srvHostname)
+	defer dnsCleanup()
 	srvAddr := net.JoinHostPort(srvHostname, srvURL.Port())
 	targetURL := "https://" + srvAddr
 
@@ -380,12 +451,12 @@ func TestHTTPTracing(test *testing.T) {
 	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
-		ReqTimeout:       15 * time.Second,
+		ReqTimeout:       5 * time.Second,
 		DisableKeepAlive: true,
 		TLSClientConfig: &tls.Config{
-			RootCAs:    certPool,
-			ServerName: "example.com",
+			RootCAs: certPool,
 		},
+		Nameservers: []string{dnsAddr},
 	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
@@ -599,7 +670,7 @@ func TestHTTPTracing(test *testing.T) {
 	relTimeIsInBetween(t, tlsTun.HandshakeBeginAt, usedTCPConn.HandshakeEndAt, usedTCPConn.ConnCloseAt)
 	relTimeIsInBetween(t, tlsTun.HandshakeEndAt, tlsTun.HandshakeBeginAt, usedTCPConn.ConnCloseAt)
 	t.Expect(tlsTun.HandshakeErr).To(BeZero())
-	t.Expect(tlsTun.ServerName).To(Equal("example.com"))
+	t.Expect(tlsTun.ServerName).To(Equal(srvHostname))
 	t.Expect(tlsTun.NegotiatedProto).To(Equal("h2"))
 	t.Expect(tlsTun.CipherSuite).ToNot(BeZero())
 	// httptest uses a single self-signed certificate (O=Acme Co, IsCA=true).

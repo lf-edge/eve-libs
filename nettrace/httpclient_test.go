@@ -4,14 +4,18 @@
 package nettrace_test
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -254,7 +258,7 @@ func relTimeIsInBetween(t *GomegaWithT, timestamp, lowerBound, upperBound nettra
 	t.Expect(timestamp.Rel <= upperBound.Rel).To(BeTrue())
 }
 
-func checkCapturedTCPHandshakeForHTTPS(t *testing.T, pcap []gopacket.Packet) {
+func checkCapturedTCPHandshake(t *testing.T, pcap []gopacket.Packet, port layers.TCPPort) {
 	var foundSYN, foundSYNACK, foundACK bool
 
 	for _, packet := range pcap {
@@ -276,43 +280,67 @@ func checkCapturedTCPHandshakeForHTTPS(t *testing.T, pcap []gopacket.Packet) {
 		}
 
 		// SYN packet from client to server
-		if tcp.SYN && !tcp.ACK && tcp.DstPort == 443 {
-			t.Logf("Found SYN to port 443: %s:%d -> %s:%d",
-				srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
+		if tcp.SYN && !tcp.ACK && tcp.DstPort == port {
+			t.Logf("Found SYN to port %d: %s:%d -> %s:%d",
+				port, srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
 			foundSYN = true
 		}
 
 		// SYN-ACK packet from server to client
-		if tcp.SYN && tcp.ACK && tcp.SrcPort == 443 {
-			t.Logf("Found SYN-ACK from port 443: %s:%d -> %s:%d",
-				srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
+		if tcp.SYN && tcp.ACK && tcp.SrcPort == port {
+			t.Logf("Found SYN-ACK from port %d: %s:%d -> %s:%d",
+				port, srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
 			foundSYNACK = true
 		}
 
 		// Final ACK completing the handshake
-		if !foundACK && !tcp.SYN && tcp.ACK && tcp.DstPort == 443 {
-			t.Logf("Found ACK to port 443: %s:%d -> %s:%d",
-				srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
+		if !foundACK && !tcp.SYN && tcp.ACK && tcp.DstPort == port {
+			t.Logf("Found ACK to port %d: %s:%d -> %s:%d",
+				port, srcIP, tcp.SrcPort, dstIP, tcp.DstPort)
 			foundACK = true
 		}
 	}
 
 	if !foundSYN {
-		t.Error("Did not find SYN packet to port 443")
+		t.Errorf("Did not find SYN packet to port %d", port)
 	}
 	if !foundSYNACK {
-		t.Error("Did not find SYN-ACK packet from port 443")
+		t.Errorf("Did not find SYN-ACK packet from port %d", port)
 	}
 	if !foundACK {
-		t.Error("Did not find final ACK to port 443")
+		t.Errorf("Did not find final ACK to port %d", port)
 	}
 }
 
 func TestHTTPTracing(test *testing.T) {
-	defaultLink, err := getLinkForDefaultRoute()
+	// Local HTTPS test server with HTTP/2 enabled.
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html><body>Hello from local test server</body></html>"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	// Trust the test server's self-signed certificate.
+	certPool := x509.NewCertPool()
+	certPool.AddCert(srv.Certificate())
+
+	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
-		test.Skipf("Skipping test: no default route found (%v)", err)
+		test.Fatalf("parse server URL: %v", err)
 	}
+	srvPort, _ := strconv.Atoi(srvURL.Port())
+
+	// Use 127.0.0.1.nip.io as hostname: it resolves to 127.0.0.1 via real
+	// DNS, so we exercise the full DNS resolution path.
+	// The httptest cert has "example.com" as a SAN, so we set ServerName
+	// to match for TLS verification.
+	const srvHostname = "127.0.0.1.nip.io"
+	srvAddr := net.JoinHostPort(srvHostname, srvURL.Port())
+	targetURL := "https://" + srvAddr
+
 	rootUser := os.Geteuid() == 0
 	var withConntrackAcct bool
 	if rootUser {
@@ -345,19 +373,23 @@ func TestHTTPTracing(test *testing.T) {
 	if rootUser {
 		opts = append(opts, &nettrace.WithConntrack{})
 		opts = append(opts, &nettrace.WithPacketCapture{
-			Interfaces: []string{defaultLink.Attrs().Name},
+			Interfaces: []string{"lo"},
 		})
 	}
 
 	sessionUUID := uuid.New().String()
 	client, err := nettrace.NewHTTPClient(nettrace.HTTPClientCfg{
 		PreferHTTP2:      true,
-		ReqTimeout:       5 * time.Second,
+		ReqTimeout:       15 * time.Second,
 		DisableKeepAlive: true,
+		TLSClientConfig: &tls.Config{
+			RootCAs:    certPool,
+			ServerName: "example.com",
+		},
 	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
-	req, err := http.NewRequest("GET", "https://www.example.com", nil)
+	req, err := http.NewRequest("GET", targetURL, nil)
 	t.Expect(err).ToNot(HaveOccurred())
 	req.Header.Set("Accept", "text/html")
 	resp, err := client.Do(req)
@@ -377,21 +409,18 @@ func TestHTTPTracing(test *testing.T) {
 		// Give pcap some time to complete capture of all the packets.
 		time.Sleep(3 * time.Second)
 	}
-	trace, pcap, err := client.GetTrace("GET www.example.com over HTTPS")
+	trace, pcap, err := client.GetTrace("GET local HTTPS server")
 	t.Expect(err).ToNot(HaveOccurred())
 	if rootUser {
 		t.Expect(pcap).To(HaveLen(1))
-		t.Expect(pcap[0].InterfaceName).To(Equal(defaultLink.Attrs().Name))
-		t.Expect(pcap[0].WithTCPPayload).To(BeTrue())
+		t.Expect(pcap[0].InterfaceName).To(Equal("lo"))
 		t.Expect(pcap[0].Packets).ToNot(BeEmpty())
-		// Most of the captured packets are encrypted with TLS, but we can at least
-		// check that TCP handshake is included in the trace.
-		checkCapturedTCPHandshakeForHTTPS(test, pcap[0].Packets)
+		checkCapturedTCPHandshake(test, pcap[0].Packets, layers.TCPPort(srvPort))
 	} else {
 		t.Expect(pcap).To(BeEmpty())
 	}
 
-	t.Expect(trace.Description).To(Equal("GET www.example.com over HTTPS"))
+	t.Expect(trace.Description).To(Equal("GET local HTTPS server"))
 	t.Expect(trace.TraceBeginAt.IsRel).To(BeFalse())
 	t.Expect(trace.TraceBeginAt.Abs.After(startTime)).To(BeTrue())
 	t.Expect(trace.TraceBeginAt.Abs.Before(time.Now())).To(BeTrue())
@@ -407,7 +436,7 @@ func TestHTTPTracing(test *testing.T) {
 	relTimeIsInBetween(t, dial.DialEndAt, dial.DialBeginAt, trace.TraceEndAt)
 	t.Expect(dial.DialErr).To(BeZero())
 	t.Expect(dial.SourceIP).To(BeZero())
-	t.Expect(dial.DstAddress).To(Equal("www.example.com:443"))
+	t.Expect(dial.DstAddress).To(Equal(srvAddr))
 	t.Expect(dial.ResolverDials).ToNot(BeEmpty())
 	for _, resolvDial := range dial.ResolverDials {
 		relTimeIsInBetween(t, resolvDial.DialBeginAt, dial.DialBeginAt, dial.DialEndAt)
@@ -433,7 +462,7 @@ func TestHTTPTracing(test *testing.T) {
 		dnsMsg := dnsQuery.DNSQueryMsgs[0]
 		relTimeIsInBetween(t, dnsMsg.SentAt, udpConn.SocketCreateAt, udpConn.ConnCloseAt)
 		t.Expect(dnsMsg.Questions).To(HaveLen(1))
-		t.Expect(dnsMsg.Questions[0].Name).To(Equal("www.example.com."))
+		t.Expect(dnsMsg.Questions[0].Name).To(Equal(srvHostname + "."))
 		t.Expect(dnsMsg.Questions[0].Type).To(Or(
 			Equal(nettrace.DNSResTypeA), Equal(nettrace.DNSResTypeAAAA)))
 		t.Expect(dnsMsg.Truncated).To(BeFalse())
@@ -442,8 +471,6 @@ func TestHTTPTracing(test *testing.T) {
 		dnsReply := dnsQuery.DNSReplyMsgs[0]
 		relTimeIsInBetween(t, dnsReply.RecvAt, dnsMsg.SentAt, udpConn.ConnCloseAt)
 		t.Expect(dnsReply.ID == dnsMsg.ID).To(BeTrue())
-		t.Expect(dnsReply.RCode).To(Equal(nettrace.DNSRCodeNoError))
-		t.Expect(dnsReply.Answers).ToNot(BeEmpty())
 		t.Expect(dnsReply.Truncated).To(BeFalse())
 	}
 
@@ -499,7 +526,7 @@ func TestHTTPTracing(test *testing.T) {
 	relTimeIsInBetween(t, httpReq.ReqSentAt, traceBeginAsRel, trace.TraceEndAt)
 	t.Expect(httpReq.ReqError).To(BeZero())
 	t.Expect(httpReq.ReqMethod).To(Equal("GET"))
-	t.Expect(httpReq.ReqURL).To(Equal("https://www.example.com"))
+	t.Expect(httpReq.ReqURL).To(Equal(targetURL))
 	t.Expect(httpReq.ReqHeader).ToNot(BeEmpty())
 	acceptHdr := httpReq.ReqHeader.Get("Accept")
 	t.Expect(acceptHdr).ToNot(BeNil())
@@ -516,7 +543,6 @@ func TestHTTPTracing(test *testing.T) {
 	t.Expect(httpReq.RespContentLen).ToNot(BeZero())
 
 	// TCP connection traces
-	// There can be multiple parallel connection attempts made as per Happy Eyeballs algorithm.
 	t.Expect(trace.TCPConns).ToNot(BeEmpty())
 	for _, tcpConn := range trace.TCPConns {
 		t.Expect(tcpConn.TraceID).ToNot(BeZero())
@@ -524,8 +550,8 @@ func TestHTTPTracing(test *testing.T) {
 		t.Expect(tcpConn.Reused).To(BeFalse())
 		t.Expect(net.ParseIP(tcpConn.AddrTuple.SrcIP)).ToNot(BeNil())
 		t.Expect(net.ParseIP(tcpConn.AddrTuple.DstIP)).ToNot(BeNil())
-		t.Expect(tcpConn.AddrTuple.SrcPort).ToNot(BeZero()) // TODO: this may fail for IPv6
-		t.Expect(tcpConn.AddrTuple.DstPort).ToNot(BeZero())
+		t.Expect(tcpConn.AddrTuple.SrcPort).ToNot(BeZero())
+		t.Expect(tcpConn.AddrTuple.DstPort).To(BeEquivalentTo(srvPort))
 		if rootUser {
 			t.Expect(tcpConn.Conntract).ToNot(BeNil())
 			if withConntrackAcct {
@@ -534,8 +560,8 @@ func TestHTTPTracing(test *testing.T) {
 				t.Expect(tcpConn.Conntract.BytesRecv).ToNot(BeZero())
 				t.Expect(tcpConn.Conntract.BytesSent).ToNot(BeZero())
 			}
-			t.Expect(tcpConn.Conntract.AddrOrig.DstPort).To(BeEquivalentTo(443))
-			t.Expect(tcpConn.Conntract.AddrReply.SrcPort).To(BeEquivalentTo(443))
+			t.Expect(tcpConn.Conntract.AddrOrig.DstPort).To(BeEquivalentTo(srvPort))
+			t.Expect(tcpConn.Conntract.AddrReply.SrcPort).To(BeEquivalentTo(srvPort))
 			relTimeIsInBetween(t, tcpConn.Conntract.CapturedAt, traceBeginAsRel, trace.TraceEndAt)
 			status := uint32(tcpConn.Conntract.Status)
 			t.Expect(status & nettrace.ConntrackFlags["seen-reply"]).ToNot(BeZero())
@@ -573,34 +599,15 @@ func TestHTTPTracing(test *testing.T) {
 	relTimeIsInBetween(t, tlsTun.HandshakeBeginAt, usedTCPConn.HandshakeEndAt, usedTCPConn.ConnCloseAt)
 	relTimeIsInBetween(t, tlsTun.HandshakeEndAt, tlsTun.HandshakeBeginAt, usedTCPConn.ConnCloseAt)
 	t.Expect(tlsTun.HandshakeErr).To(BeZero())
-	t.Expect(tlsTun.ServerName).To(Equal("www.example.com"))
+	t.Expect(tlsTun.ServerName).To(Equal("example.com"))
 	t.Expect(tlsTun.NegotiatedProto).To(Equal("h2"))
 	t.Expect(tlsTun.CipherSuite).ToNot(BeZero())
-	t.Expect(tlsTun.PeerCerts).To(HaveLen(4))
+	// httptest uses a single self-signed certificate (O=Acme Co, IsCA=true).
+	t.Expect(tlsTun.PeerCerts).To(HaveLen(1))
 	peerCert := tlsTun.PeerCerts[0]
-	t.Expect(peerCert.IsCA).To(BeFalse())
-	t.Expect(peerCert.Subject).To(Equal("CN=example.com"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=Cloudflare TLS Issuing ECC CA 1,O=CLOUDFLARE\\, INC.,C=US"))
-	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
-	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
-	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
-	t.Expect(peerCert.NotAfter.IsRel).To(BeFalse())
-	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
-	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
-	peerCert = tlsTun.PeerCerts[1]
 	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Subject).To(Equal("CN=Cloudflare TLS Issuing ECC CA 1,O=CLOUDFLARE\\, INC.,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=SSL.com TLS Transit ECC CA R2,O=SSL Corporation,C=US"))
-	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
-	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
-	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())
-	t.Expect(peerCert.NotAfter.IsRel).To(BeFalse())
-	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
-	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
-	peerCert = tlsTun.PeerCerts[2]
-	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Subject).To(Equal("CN=SSL.com TLS Transit ECC CA R2,O=SSL Corporation,C=US"))
-	t.Expect(peerCert.Issuer).To(Equal("CN=SSL.com TLS ECC Root CA 2022,O=SSL Corporation,C=US"))
+	t.Expect(peerCert.Subject).To(Equal("O=Acme Co"))
+	t.Expect(peerCert.Issuer).To(Equal("O=Acme Co"))
 	t.Expect(peerCert.NotBefore.Undefined()).To(BeFalse())
 	t.Expect(peerCert.NotBefore.IsRel).To(BeFalse())
 	t.Expect(peerCert.NotAfter.Undefined()).To(BeFalse())

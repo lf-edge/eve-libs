@@ -8,7 +8,10 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"testing"
 	"time"
+
+	"github.com/lf-edge/eve-libs/zedUpload"
 )
 
 const (
@@ -229,5 +232,116 @@ func newUnstableFileReader(r io.ReadSeekCloser, unstableStartBytes uint64, unsta
 		dropPercent:        dropPercent,
 		logger:             logger,
 		rand:               rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+func TestIsToken(t *testing.T) {
+	tests := []struct {
+		name string // description of this test case
+		// Named input parameters for target function.
+		str  string
+		want bool
+	}{
+		{
+			name: "NTLM",
+			str:  "NTLM",
+			want: true,
+		},
+		{
+			name: "Bearer",
+			str:  "Bearer",
+			want: true,
+		},
+		{
+			name: "Basic",
+			str:  "Basic",
+			want: true,
+		},
+		{
+			name: "Spaces",
+			str:  " ",
+			want: false,
+		},
+		{
+			name: "Empty",
+			str:  "",
+			want: true,
+		},
+		{
+			name: "Newline",
+			str:  "\n",
+			want: false,
+		},
+		{
+			name: "Colon",
+			str:  ":",
+			want: false,
+		},
+		{
+			name: "Equal sign",
+			str:  "=",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := zedUpload.IsToken(tt.str)
+			if got != tt.want {
+				t.Errorf("isToken() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsToken68(t *testing.T) {
+	tests := []struct {
+		name string // description of this test case
+		// Named input parameters for target function.
+		str  string
+		want bool
+	}{
+		{
+			name: "Spaces",
+			str:  " ",
+			want: false,
+		},
+		{
+			name: "Empty",
+			str:  "",
+			want: true,
+		},
+		{
+			name: "Newline",
+			str:  "\n",
+			want: false,
+		},
+		{
+			name: "Colon",
+			str:  ":",
+			want: false,
+		},
+		{
+			name: "Trailing equal sign",
+			str:  "=",
+			want: true,
+		},
+		{
+			name: "Non-Trailing equal sign",
+			str:  "=A",
+			want: false,
+		},
+		{
+			name: "foo:bar",
+			str:  "Zm9vOmJhcg==",
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := zedUpload.IsToken68(tt.str)
+			if got != tt.want {
+				t.Errorf("isToken68() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

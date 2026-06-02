@@ -2,6 +2,7 @@ package zedUpload_test
 
 import (
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -344,4 +345,16 @@ func TestIsToken68(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzIsToken68(f *testing.F) {
+	f.Fuzz(func(t *testing.T, username, password string) {
+		bs := []byte(fmt.Sprintf("%s:%s", username, password))
+		str64 := base64.StdEncoding.EncodeToString(bs)
+
+		if !zedUpload.IsToken68(str64) {
+			t.Fatalf("encoding of %s/%s '%s' failed:", username, password, str64)
+		}
+	})
+
 }

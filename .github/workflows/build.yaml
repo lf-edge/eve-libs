@@ -54,7 +54,11 @@ jobs:
       - name: test
         # build binaries and run them to test; sufficient to run on native arch
         if: matrix.target.arch == 'amd64' && matrix.target.os == 'linux'
-        run: go test ./... -v -race
+        run: |
+          go test ./... -v -race
+          go test $(pwd)/zedUpload -race \
+            -fuzz=Fuzz.\* -run=Fuzz.\* \
+            -fuzztime=1m -v ./...
       - name: test (integration - MinIO)
         # build binaries and run them to test; sufficient to run on native arch
         if: matrix.target.arch == 'amd64' && matrix.target.os == 'linux'

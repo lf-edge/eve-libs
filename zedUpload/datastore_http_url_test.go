@@ -6,8 +6,10 @@ package zedUpload_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -17,9 +19,9 @@ import (
 // TestHTTPURLConstruction verifies that URLs are constructed correctly
 // using url.JoinPath, avoiding double slashes or missing slashes.
 func TestHTTPURLConstruction(t *testing.T) {
-	var receivedPath string
+	receivedPathChan := make(chan *http.Request)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedPath = r.URL.Path
+		receivedPathChan <- r
 		w.WriteHeader(http.StatusOK)
 		// Return some dummy content so downloads don't fail immediately on Body read
 		_, err := w.Write([]byte("some data"))
@@ -32,11 +34,12 @@ func TestHTTPURLConstruction(t *testing.T) {
 	serverURL := ts.URL
 
 	tests := []struct {
-		name           string
-		remoteDir      string
-		remoteFilename string
-		operation      zedUpload.SyncOpType
-		expectedPath   string
+		name            string
+		remoteDir       string
+		remoteFilename  string
+		operation       zedUpload.SyncOpType
+		expectedPath    string
+		expectedQueries url.Values
 	}{
 		// Download Tests (URL = serverURL + remoteDir + remoteFilename)
 		{
@@ -73,6 +76,17 @@ func TestHTTPURLConstruction(t *testing.T) {
 			remoteFilename: "/file.txt",
 			operation:      zedUpload.SyncOpDownload,
 			expectedPath:   "/folder/file.txt",
+		},
+		{
+			name:           "Download: Filename with query parameters",
+			remoteDir:      "folder",
+			remoteFilename: "/file.txt?foo=bar&bar=baz",
+			operation:      zedUpload.SyncOpDownload,
+			expectedPath:   "/folder/file.txt",
+			expectedQueries: url.Values{
+				"foo": []string{"bar"},
+				"bar": []string{"baz"},
+			},
 		},
 		{
 			name:           "Download: Empty dir, filename with slash",
@@ -162,7 +176,6 @@ func TestHTTPURLConstruction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			receivedPath = ""
 
 			httpAuth := &zedUpload.AuthInput{AuthType: "http"}
 			ctx, err := zedUpload.NewDronaCtx("test-url-constr", 0)
@@ -188,6 +201,7 @@ func TestHTTPURLConstruction(t *testing.T) {
 				t.Fatalf("req.Post() failed: %v", err)
 			}
 
+			receivedReq := <-receivedPathChan
 			// Wait for response
 			timeout := time.After(2 * time.Second)
 			done := false
@@ -202,9 +216,12 @@ func TestHTTPURLConstruction(t *testing.T) {
 				}
 			}
 
+			if tt.expectedQueries != nil && !reflect.DeepEqual(tt.expectedQueries, receivedReq.URL.Query()) {
+				t.Fatalf("expected queries: %+v, got: %+v", tt.expectedQueries, receivedReq.URL.Query())
+			}
 			// Check path
-			if receivedPath != tt.expectedPath {
-				t.Errorf("Path mismatch.\nExpected: %q\nGot:      %q", tt.expectedPath, receivedPath)
+			if receivedReq.URL.Path != tt.expectedPath {
+				t.Errorf("Path mismatch.\nExpected: %q\nGot:      %q", tt.expectedPath, receivedReq.URL.Path)
 			}
 		})
 	}

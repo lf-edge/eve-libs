@@ -29,6 +29,16 @@ type Resp struct {
 }
 
 func getSftpClient(host, user, pass string) (*sftp.Client, error) {
+	// Load allowed host public key from a file and use it to verify the server's host key.
+	hostKeyBytes, err := os.ReadFile("/etc/ssh/sftp_hostkey.pub")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read allowed host key: %w", err)
+	}
+	allowedHostKey, _, _, _, err := ssh.ParseAuthorizedKey(hostKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse allowed host key: %w", err)
+	}
+
 	clientConfig := &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
@@ -36,13 +46,13 @@ func getSftpClient(host, user, pass string) (*sftp.Client, error) {
 			ssh.KeyboardInteractive(
 				func(user, instruction string, questions []string, echos []bool) ([]string, error) {
 					answers := make([]string, len(questions))
-					for i := range answers {
+						for i := range answers {
 						answers[i] = pass
 					}
 					return answers, nil
 				}),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: ssh.FixedHostKey(allowedHostKey),
 		Timeout:         time.Duration(10) * time.Second,
 	}
 

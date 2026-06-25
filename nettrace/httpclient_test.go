@@ -693,12 +693,14 @@ func TestHTTPTracing(test *testing.T) {
 // fetchTLSErrorCert issues an HTTPS GET that is expected to fail TLS
 // verification and returns the single peer certificate captured by the trace.
 // The badssl.com endpoints it targets are reachable only over the public
-// internet, so when the connection cannot get far enough for the server to
-// present its certificate (endpoint unreachable, handshake timed out,
-// connection reset), the test is skipped rather than failed: the cert-capture
-// behavior under test simply cannot be exercised in that environment.
+// internet and intermittently reset the handshake before presenting their
+// certificate; when that happens no certificate is captured and the
+// cert-capture behavior under test cannot be exercised, so the (sub)test is
+// skipped rather than failed. The trace is cleared first so a previously
+// skipped case cannot leave a stray tunnel behind for this one.
 func fetchTLSErrorCert(test *testing.T, t *GomegaWithT, client *nettrace.HTTPClient,
 	url, description string) nettrace.PeerCert {
+	t.Expect(client.ClearTrace()).To(Succeed())
 	req, err := http.NewRequest("GET", url, nil)
 	t.Expect(err).ToNot(HaveOccurred())
 	resp, err := client.Do(req)
@@ -707,8 +709,8 @@ func fetchTLSErrorCert(test *testing.T, t *GomegaWithT, client *nettrace.HTTPCli
 	trace, _, err := client.GetTrace(description)
 	t.Expect(err).ToNot(HaveOccurred())
 	if len(trace.TLSTunnels) == 0 {
-		test.Skipf("Skipping test: no TLS tunnel traced for %s, "+
-			"endpoint likely unreachable", url)
+		test.Skipf("Skipping %s: no TLS tunnel traced for %s, "+
+			"endpoint likely unreachable", description, url)
 	}
 	t.Expect(trace.TLSTunnels).To(HaveLen(1))
 	tlsTun := trace.TLSTunnels[0]
@@ -717,15 +719,17 @@ func fetchTLSErrorCert(test *testing.T, t *GomegaWithT, client *nettrace.HTTPCli
 		// The handshake failed before the server certificate was received,
 		// which happens with timeouts/resets rather than the cert-validation
 		// errors this test exercises. Treat it as an unreachable endpoint.
-		test.Skipf("Skipping test: TLS handshake with %s failed before the "+
-			"server certificate was received (err: %s)", url, tlsTun.HandshakeErr)
+		test.Skipf("Skipping %s: TLS handshake with %s failed before the "+
+			"server certificate was received (err: %s)", description, url, tlsTun.HandshakeErr)
 	}
 	t.Expect(tlsTun.PeerCerts).To(HaveLen(1)) // when TLS fails, we only get the problematic cert
 	return tlsTun.PeerCerts[0]
 }
 
 // TestTLSCertErrors : test that even when TLS handshake fails due to a bad certificate,
-// we still get the certificate issuer and the subject in the trace.
+// we still get the certificate issuer and the subject in the trace. Each endpoint
+// is exercised as its own subtest so that an intermittent reset against one of them
+// only skips that case, leaving the others to run.
 func TestTLSCertErrors(test *testing.T) {
 	t := NewGomegaWithT(test)
 
@@ -742,35 +746,35 @@ func TestTLSCertErrors(test *testing.T) {
 	}, sessionUUID, opts...)
 	t.Expect(err).ToNot(HaveOccurred())
 
-	// Expired certificate
-	peerCert := fetchTLSErrorCert(test, t, client, "https://expired.badssl.com/", "expired cert")
-	t.Expect(peerCert.IsCA).To(BeFalse())
-	t.Expect(peerCert.Issuer).To(Equal("CN=COMODO RSA Domain Validation Secure Server CA,O=COMODO CA Limited,L=Salford,ST=Greater Manchester,C=GB"))
-	t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com,OU=Domain Control Validated+OU=PositiveSSL Wildcard"))
-	t.Expect(peerCert.NotBefore.Abs.IsZero()).To(BeFalse())
-	t.Expect(peerCert.NotAfter.Abs.Before(time.Now())).To(BeTrue())
-	err = client.ClearTrace()
-	t.Expect(err).ToNot(HaveOccurred())
+	test.Run("expired certificate", func(subTest *testing.T) {
+		t := NewGomegaWithT(subTest)
+		peerCert := fetchTLSErrorCert(subTest, t, client, "https://expired.badssl.com/", "expired cert")
+		t.Expect(peerCert.IsCA).To(BeFalse())
+		t.Expect(peerCert.Issuer).To(Equal("CN=COMODO RSA Domain Validation Secure Server CA,O=COMODO CA Limited,L=Salford,ST=Greater Manchester,C=GB"))
+		t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com,OU=Domain Control Validated+OU=PositiveSSL Wildcard"))
+		t.Expect(peerCert.NotBefore.Abs.IsZero()).To(BeFalse())
+		t.Expect(peerCert.NotAfter.Abs.Before(time.Now())).To(BeTrue())
+	})
 
-	// Wrong Host
-	peerCert = fetchTLSErrorCert(test, t, client, "https://wrong.host.badssl.com/", "wrong host")
-	t.Expect(peerCert.IsCA).To(BeFalse())
-	t.Expect(peerCert.Issuer).To(MatchRegexp(`^CN=R\d{1,2},O=Let's Encrypt,C=US$`))
-	t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com"))
-	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
-	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
-	err = client.ClearTrace()
-	t.Expect(err).ToNot(HaveOccurred())
+	test.Run("wrong host", func(subTest *testing.T) {
+		t := NewGomegaWithT(subTest)
+		peerCert := fetchTLSErrorCert(subTest, t, client, "https://wrong.host.badssl.com/", "wrong host")
+		t.Expect(peerCert.IsCA).To(BeFalse())
+		t.Expect(peerCert.Issuer).To(MatchRegexp(`^CN=R\d{1,2},O=Let's Encrypt,C=US$`))
+		t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com"))
+		t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
+		t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
+	})
 
-	// Untrusted root
-	peerCert = fetchTLSErrorCert(test, t, client, "https://untrusted-root.badssl.com/", "untrusted root")
-	t.Expect(peerCert.IsCA).To(BeTrue())
-	t.Expect(peerCert.Issuer).To(Equal("CN=BadSSL Untrusted Root Certificate Authority,O=BadSSL,L=San Francisco,ST=California,C=US"))
-	t.Expect(peerCert.Subject).To(Equal("CN=BadSSL Untrusted Root Certificate Authority,O=BadSSL,L=San Francisco,ST=California,C=US"))
-	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
-	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
-	err = client.ClearTrace()
-	t.Expect(err).ToNot(HaveOccurred())
+	test.Run("untrusted root", func(subTest *testing.T) {
+		t := NewGomegaWithT(subTest)
+		peerCert := fetchTLSErrorCert(subTest, t, client, "https://untrusted-root.badssl.com/", "untrusted root")
+		t.Expect(peerCert.IsCA).To(BeTrue())
+		t.Expect(peerCert.Issuer).To(Equal("CN=BadSSL Untrusted Root Certificate Authority,O=BadSSL,L=San Francisco,ST=California,C=US"))
+		t.Expect(peerCert.Subject).To(Equal("CN=BadSSL Untrusted Root Certificate Authority,O=BadSSL,L=San Francisco,ST=California,C=US"))
+		t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
+		t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())
+	})
 
 	err = client.Close()
 	t.Expect(err).ToNot(HaveOccurred())

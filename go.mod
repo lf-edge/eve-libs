@@ -12,8 +12,8 @@ require (
 	github.com/packetcap/go-pcap v0.0.0-20230717110547-c34843f9206d
 	github.com/sirupsen/logrus v1.9.3
 	github.com/ti-mo/conntrack v0.5.3-0.20250707093024-c0d46dc6bcc8
-	golang.org/x/net v0.48.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/net v0.55.0
+	golang.org/x/sys v0.45.0
 )
 
 require (
@@ -24,8 +24,8 @@ require (
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/ti-mo/netfilter v0.5.3 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/text v0.32.0
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.37.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -48,7 +48,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.3.5
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.46.0
+	golang.org/x/crypto v0.51.0
 	golang.org/x/oauth2 v0.34.0
 	google.golang.org/api v0.248.0
 )

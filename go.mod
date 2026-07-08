@@ -48,7 +48,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.3.5
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/oauth2 v0.34.0
 	google.golang.org/api v0.248.0
 )

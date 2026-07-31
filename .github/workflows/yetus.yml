@@ -12,6 +12,9 @@ on:  # yamllint disable-line rule:truthy
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   yetus:
     runs-on: ubuntu-24.04

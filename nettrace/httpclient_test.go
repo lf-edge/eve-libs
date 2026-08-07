@@ -760,7 +760,10 @@ func TestTLSCertErrors(test *testing.T) {
 		t := NewGomegaWithT(subTest)
 		peerCert := fetchTLSErrorCert(subTest, t, client, "https://wrong.host.badssl.com/", "wrong host")
 		t.Expect(peerCert.IsCA).To(BeFalse())
-		t.Expect(peerCert.Issuer).To(MatchRegexp(`^CN=R\d{1,2},O=Let's Encrypt,C=US$`))
+		// Let's Encrypt may start issuing from a new intermediate at any time
+		// without warning, so match only the parts of the issuer DN that do not
+		// change across intermediate rotations.
+		t.Expect(peerCert.Issuer).To(MatchRegexp(`^CN=[^,]+,O=Let's Encrypt,C=US$`))
 		t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com"))
 		t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
 		t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())

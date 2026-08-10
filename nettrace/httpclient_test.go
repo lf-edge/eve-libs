@@ -446,10 +446,10 @@ func TestTLSCertErrors(test *testing.T) {
 	t.Expect(tlsTun.PeerCerts).To(HaveLen(1))
 	peerCert = tlsTun.PeerCerts[0]
 	t.Expect(peerCert.IsCA).To(BeFalse())
-	t.Expect(peerCert.Issuer).To(SatisfyAny(
-		Equal("CN=R10,O=Let's Encrypt,C=US"),
-		Equal("CN=R11,O=Let's Encrypt,C=US"),
-		Equal("CN=R13,O=Let's Encrypt,C=US")))
+	// Let's Encrypt may start issuing from a new intermediate at any time
+	// without warning, so match only the parts of the issuer DN that do not
+	// change across intermediate rotations.
+	t.Expect(peerCert.Issuer).To(MatchRegexp(`^CN=[^,]+,O=Let's Encrypt,C=US$`))
 	t.Expect(peerCert.Subject).To(Equal("CN=*.badssl.com"))
 	t.Expect(peerCert.NotBefore.Abs.Before(time.Now())).To(BeTrue())
 	t.Expect(peerCert.NotAfter.Abs.After(time.Now())).To(BeTrue())

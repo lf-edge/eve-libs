@@ -12,8 +12,8 @@ require (
 	github.com/packetcap/go-pcap v0.0.0-20230717110547-c34843f9206d
 	github.com/sirupsen/logrus v1.9.4
 	github.com/ti-mo/conntrack v0.5.3-0.20250707093024-c0d46dc6bcc8
-	golang.org/x/net v0.55.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/net v0.58.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -24,8 +24,8 @@ require (
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/ti-mo/netfilter v0.5.3 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/text v0.37.0
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.41.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -48,7 +48,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.3.5
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.52.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.264.0
 )
@@ -148,6 +148,6 @@ require (
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.83.1 // indirect
+	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )

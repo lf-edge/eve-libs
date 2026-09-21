@@ -44,7 +44,8 @@ func TestMain(m *testing.M) {
 	pass := getenvDefault("MINIO_SECRET_ACCESS_KEY", "minioadmin")
 
 	req := tc.ContainerRequest{
-		Image:        "minio/minio:latest",
+		// MinIO publishes only to quay.io; the Docker Hub mirror is gone.
+		Image:        "quay.io/minio/minio:latest",
 		ExposedPorts: []string{"9000/tcp", "9001/tcp"},
 		Env: map[string]string{
 			"MINIO_ROOT_USER":     user,

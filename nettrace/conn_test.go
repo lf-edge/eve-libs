@@ -95,8 +95,9 @@ type testTracer struct {
 	traces []networkTrace
 }
 
-func (tt *testTracer) getTracerID() TraceID       { return "test-tracer" }
-func (tt *testTracer) getRelTimestamp() Timestamp { return Timestamp{IsRel: true, Rel: 0} }
+func (tt *testTracer) getTracerID() TraceID         { return "test-tracer" }
+func (tt *testTracer) getRelTimestamp() Timestamp   { return Timestamp{IsRel: true, Rel: 0} }
+func (tt *testTracer) tracingDone() <-chan struct{} { return nil } // never stops tracing
 func (tt *testTracer) publishTrace(t networkTrace) {
 	tt.mu.Lock()
 	tt.traces = append(tt.traces, t)

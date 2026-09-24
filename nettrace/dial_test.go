@@ -4,9 +4,11 @@
 package nettrace
 
 import (
+	"bytes"
 	"context"
 	"net"
-	"runtime"
+	"runtime/pprof"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +32,22 @@ func (st *stoppableTracer) publishTrace(t networkTrace) {
 	st.mu.Lock()
 	st.traces = append(st.traces, t)
 	st.mu.Unlock()
+}
+
+// dialWatchers counts the goroutines that tracedDialer.dial started to watch a
+// dial context, from the goroutine profile. Counting them by name keeps the
+// test independent of whatever else runs in the test binary; the global
+// goroutine count also moves with goroutines the test does not own.
+func dialWatchers() int {
+	var buf bytes.Buffer
+	_ = pprof.Lookup("goroutine").WriteTo(&buf, 2)
+	watchers := 0
+	for _, stack := range strings.Split(buf.String(), "\n\n") {
+		if strings.Contains(stack, "(*tracedDialer).dial.func") {
+			watchers++
+		}
+	}
+	return watchers
 }
 
 // TestDialContextWatcherStopsWithTracing checks that the goroutine watching a
@@ -66,7 +84,6 @@ func TestDialContextWatcherStopsWithTracing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	baseline := runtime.NumGoroutine()
 	const dials = 20
 	for range dials {
 		conn, err := dialer.dial(ctx, "tcp", listener.Addr().String())
@@ -78,19 +95,18 @@ func TestDialContextWatcherStopsWithTracing(t *testing.T) {
 			panic(err)
 		}
 	}
-	if got := runtime.NumGoroutine(); got < baseline+dials {
-		t.Fatalf("expected one watcher per dial, goroutines went from %d to %d",
-			baseline, got)
+	if got := dialWatchers(); got != dials {
+		t.Fatalf("expected one context watcher per dial, found %d for %d dials",
+			got, dials)
 	}
 
 	close(tracer.done)
 	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > baseline+2 && time.Now().Before(deadline) {
+	for dialWatchers() > 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if got := runtime.NumGoroutine(); got > baseline+2 {
-		t.Fatalf("%d goroutines still running after tracing stopped, baseline %d",
-			got, baseline)
+	if got := dialWatchers(); got > 0 {
+		t.Fatalf("%d dial context watchers still running after tracing stopped", got)
 	}
 	tracer.mu.Lock()
 	defer tracer.mu.Unlock()

@@ -44,7 +44,11 @@ func TestMain(m *testing.M) {
 	pass := getenvDefault("MINIO_SECRET_ACCESS_KEY", "minioadmin")
 
 	req := tc.ContainerRequest{
-		Image:        "minio/minio:latest",
+		// MinIO's own repositories are gone: Docker Hub since 2025, quay.io
+		// since September 2026 (anonymous pulls are refused). Chainguard's
+		// public image tracks the upstream releases and has the same
+		// entrypoint, so the command below works unchanged.
+		Image:        "cgr.dev/chainguard/minio:latest",
 		ExposedPorts: []string{"9000/tcp", "9001/tcp"},
 		Env: map[string]string{
 			"MINIO_ROOT_USER":     user,

@@ -16,6 +16,7 @@ import (
 	"github.com/lf-edge/eve-libs/zedUpload/types"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const (
@@ -30,6 +31,19 @@ type Resp struct {
 }
 
 func getSftpClient(host, user, pass string) (*sftp.Client, error) {
+	knownHostsPath := os.Getenv("SSH_KNOWN_HOSTS")
+	if knownHostsPath == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		knownHostsPath = homeDir + "/.ssh/known_hosts"
+	}
+	hostKeyCallback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, err
+	}
+
 	clientConfig := &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
@@ -43,7 +57,7 @@ func getSftpClient(host, user, pass string) (*sftp.Client, error) {
 					return answers, nil
 				}),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         time.Duration(10) * time.Second,
 	}
 
